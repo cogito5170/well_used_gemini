@@ -1,0 +1,4 @@
+.se_new/
+.venv/
+.env
+__pycache__/

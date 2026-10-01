@@ -1,0 +1,233 @@
+#!/usr/bin/env python3
+"""well_used_gemini -- Gemini 를 정책 게이트 뒤에서 돌리는 얇은 진입점.
+
+실제 일은 `cogito5170/se_new` 의 `agentic/` 이 한다(WALP 앞단 · 제어부 · Gate01 · 사고부(ReAct) · 루프 탐지기 ·
+sandbox 실행 · MCP · RAG). 여기는 그것을 **고정된 커밋으로** 받아 와서 부르기만 한다.
+
+    python3 wug.py setup              se_new 를 se_new.lock 의 커밋으로 받고(~/.cache/well_used_gemini/), 가상환경에 requests
+    python3 wug.py doctor             무엇이 준비됐고 무엇이 안 됐는지 -- 키 없이도 도는 점검을 실제로 돌린다
+    python3 wug.py run "물음"          agentic.run 을 부른다. 끝값: 0 = DONE, 그 밖 = 그 상태
+    python3 wug.py versions           고정 커밋 · 설정 모델 · MCP 버전 셋(서버가 말한 것)
+
+규칙(se_new 의 CLAUDE.md 에서 온 것):
+  · **고정 커밋만 쓴다.** se_new 의 main 이 움직여도 여기는 se_new.lock 이 바뀔 때만 바뀐다 -- 남이 받아 가는 것이
+    검사한 것과 같아야 한다. 올리려면 se_new.lock 을 고치는 커밋을 낸다
+  · **받아 온 se_new 를 고치지 않는다.** 그 안에 커밋 안 된 변경이 있으면 setup 이 멈춘다(덮어쓰지 않는다)
+  · **키는 화면에 안 찍는다.** 있다/없다만. 자식 프로세스에는 환경 변수로만 넘긴다
+  · **모르는 것은 안 된 것으로 다룬다.** 점검이 못 돈 것을 통과로 세지 않는다
+"""
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+import venv
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+LOCK = HERE / "se_new.lock"
+ENV_FILE = HERE / ".env"
+# 받아 온 se_new 와 가상환경은 **이 폴더 밖에** 둔다. Gemini CLI 는 확장을 설치할 때 사본을 만들고 update 때
+# 갈아 끼우므로, 확장 폴더 안에 두면 업데이트마다 사라진다. 체크아웃은 고정 커밋마다 따로다.
+WUG_HOME = Path(os.environ.get("WUG_HOME") or (Path.home() / ".cache" / "well_used_gemini"))
+VENV = WUG_HOME / "venv"
+
+
+def checkout_dir(commit: str) -> Path:
+    return WUG_HOME / f"se_new-{commit[:12]}"
+KEY_NAMES = ("GEMINI_API_KEY", "GEMINI_API_KEY_FALLBACK") + tuple(f"GEMINI_API_KEY_FALLBACK{i}" for i in range(2, 9))
+WRAPPER_VERSION = "0.1"
+
+
+def die(msg: str, code: int = 1) -> int:
+    print(f"[wug] {msg}", file=sys.stderr)
+    return code
+
+
+def lock() -> dict:
+    d = json.loads(LOCK.read_text(encoding="utf-8"))
+    if not (isinstance(d.get("url"), str) and isinstance(d.get("commit"), str) and len(d["commit"]) == 40):
+        raise ValueError("se_new.lock 꼴이 틀렸다: {url, commit(40자)}")
+    return d
+
+
+def git(*args, cwd=None, check=True) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=check)
+
+
+def venv_python() -> Path:
+    return VENV / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+
+
+def child_env() -> dict:
+    """자식 환경: 지금 환경 + .env 의 Gemini 키(지금 환경에 없을 때만). 다른 줄은 안 읽는다."""
+    env = dict(os.environ)
+    if ENV_FILE.is_file():
+        for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line.startswith("export "):
+                line = line[7:].strip()
+            if "=" not in line or line.startswith("#"):
+                continue
+            k, v = line.split("=", 1)
+            k, v = k.strip(), v.strip().strip('"').strip("'")
+            if k in KEY_NAMES and v and not env.get(k):
+                env[k] = v
+    return env
+
+
+def has_key(env: dict) -> bool:
+    return any(env.get(k) for k in KEY_NAMES)
+
+
+def setup(skip_pip: bool = False) -> int:
+    try:
+        lk = lock()
+    except (OSError, ValueError, json.JSONDecodeError) as e:
+        return die(f"se_new.lock 을 못 읽었다: {e}")
+    if shutil.which("git") is None:
+        return die("git 이 없다")
+    co = checkout_dir(lk["commit"])
+    WUG_HOME.mkdir(parents=True, exist_ok=True)
+    if sys.version_info < (3, 10):
+        return die(f"파이썬 3.10 이상이 필요하다(지금 {sys.version.split()[0]})")
+    if not (co / ".git").exists():
+        print(f"[wug] se_new 를 받는다: {lk['url']} -> {co}")
+        r = git("clone", "--quiet", lk["url"], str(co), check=False)
+        if r.returncode != 0:
+            return die(f"clone 실패: {r.stderr.strip()[-300:]}")
+    dirty = git("status", "--porcelain", "--untracked-files=no", cwd=co).stdout.strip()
+    if dirty:
+        return die(f"{co.name}/ 에 커밋 안 된 변경이 있다 -- 덮어쓰지 않는다. 직접 보고 치워라:\n{dirty}")
+    head = git("rev-parse", "HEAD", cwd=co, check=False).stdout.strip()
+    if head != lk["commit"]:
+        if git("cat-file", "-e", lk["commit"] + "^{commit}", cwd=co, check=False).returncode != 0:
+            r = git("fetch", "--quiet", "origin", cwd=co, check=False)
+            if r.returncode != 0:
+                return die(f"fetch 실패: {r.stderr.strip()[-300:]}")
+        r = git("-c", "advice.detachedHead=false", "checkout", "--quiet", lk["commit"], cwd=co, check=False)
+        if r.returncode != 0:
+            return die(f"고정 커밋으로 못 옮겼다: {r.stderr.strip()[-300:]}")
+    head = git("rev-parse", "HEAD", cwd=co).stdout.strip()
+    if head != lk["commit"]:
+        return die(f"HEAD 가 고정 커밋이 아니다: {head} != {lk['commit']}")
+    print(f"[wug] se_new 고정 커밋 {head[:12]}")
+    if not venv_python().exists():
+        print(f"[wug] {VENV.name}/ 를 만든다")
+        venv.EnvBuilder(with_pip=not skip_pip).create(VENV)
+    if not skip_pip:
+        r = subprocess.run([str(venv_python()), "-m", "pip", "install", "--quiet", "--disable-pip-version-check",
+                            "-r", str(HERE / "requirements.txt")], capture_output=True, text=True)
+        if r.returncode != 0:
+            return die(f"pip 실패: {r.stderr.strip()[-400:]}")
+    print("[wug] 준비 끝. 다음: python3 wug.py doctor")
+    return 0
+
+
+def _ready() -> "str | None":
+    try:
+        lk = lock()
+    except (OSError, ValueError, json.JSONDecodeError) as e:
+        return f"se_new.lock: {e}"
+    co = checkout_dir(lk["commit"])
+    if not (co / ".git").exists():
+        return "아직 setup 을 안 했다 -- python3 wug.py setup"
+    head = git("rev-parse", "HEAD", cwd=co, check=False).stdout.strip()
+    if head != lk["commit"]:
+        return f"{co.name}/ 가 고정 커밋이 아니다({head[:12]} != {lk['commit'][:12]}) -- python3 wug.py setup"
+    if not venv_python().exists():
+        return "가상환경이 없다 -- python3 wug.py setup"
+    return None
+
+
+def co_now() -> Path:
+    return checkout_dir(lock()["commit"])
+
+
+def run(question: str) -> int:
+    why = _ready()
+    if why:
+        return die(why)
+    co = co_now()
+    p = subprocess.run([str(venv_python()), "-m", "agentic.run", question], cwd=co, env=child_env())
+    return p.returncode
+
+
+def _check(label: str, argv: list, want_in: str = "", env=None) -> bool:
+    co = co_now()
+    try:
+        p = subprocess.run(argv, cwd=co, env=env or child_env(), capture_output=True, text=True, timeout=600)
+        ok = p.returncode == 0 and (want_in in p.stdout)
+        tail = (p.stdout + p.stderr).strip().splitlines()[-1:] or [""]
+    except (OSError, subprocess.TimeoutExpired) as e:
+        ok, tail = False, [f"{type(e).__name__}"]
+    print(f"  {'통과' if ok else '실패'}  {label}" + ("" if ok else f"  -- {tail[0][:160]}"))
+    return ok
+
+
+def doctor() -> int:
+    print(f"[wug] well_used_gemini {WRAPPER_VERSION}")
+    why = _ready()
+    if why:
+        print(f"  실패  준비: {why}")
+        return 1
+    lk = lock()
+    env = child_env()
+    print(f"  통과  se_new 고정 커밋 {lk['commit'][:12]}")
+    print(f"  {'있음' if has_key(env) else '없음'}  Gemini 키 (값은 안 찍는다)"
+          + ("" if has_key(env) else " -- 없으면 모델이 필요한 물음은 BLOCKED(no_api_key) 로 끝난다"))
+    py = str(venv_python())
+    results = [
+        _check("requests 가 가상환경에 있다", [py, "-c", "import requests"]),
+        _check("설정이 정책 A 를 지킨다(agentic.config)", [py, "-c", "import agentic.config as c; print(c.load().model)"],
+               "gemini-"),
+        _check("MCP 서버와 붙는다(버전 셋)", [py, "-m", "agentic.mcp_client", "--versions", "walp"], '"protocol"'),
+        _check("모델 없이 도는 길: 제어부 + sandbox 실행", [py, "-m", "agentic.run", "agentic/config.json 파일 읽어줘"],
+               "DONE (controller_tool)"),
+    ]
+    n = sum(results)
+    print(f"[wug] 점검 {n}/{len(results)} 통과" + ("" if n == len(results) else " -- 실패한 줄을 먼저 본다"))
+    if n == len(results) and has_key(env):
+        print('[wug] 다음: python3 wug.py run "//안녕"   (// = 잡담 앞단을 건너뛰고 Gemini 를 진짜로 부른다)')
+    return 0 if n == len(results) else 1
+
+
+def versions() -> int:
+    why = _ready()
+    if why:
+        return die(why)
+    lk = lock()
+    co = co_now()
+    py = str(venv_python())
+    model = subprocess.run([py, "-c", "import agentic.config as c; print(c.load().model)"], cwd=co,
+                           capture_output=True, text=True).stdout.strip() or "(못 읽음)"
+    mcp = subprocess.run([py, "-m", "agentic.mcp_client", "--versions", "walp"], cwd=co,
+                         capture_output=True, text=True).stdout.strip() or "(못 읽음)"
+    print(json.dumps({"well_used_gemini": WRAPPER_VERSION, "se_new_commit": lk["commit"], "model": model,
+                      "mcp_walp": json.loads(mcp) if mcp.startswith("{") else mcp}, ensure_ascii=False, indent=1))
+    return 0
+
+
+def main(argv=None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        print(__doc__)
+        return 0
+    cmd, rest = argv[0], argv[1:]
+    if cmd == "setup":
+        return setup(skip_pip=os.environ.get("WUG_SKIP_PIP") == "1")
+    if cmd == "doctor":
+        return doctor()
+    if cmd == "versions":
+        return versions()
+    if cmd == "run":
+        if not rest:
+            return die('물음이 없다: python3 wug.py run "물음"', 2)
+        return run(" ".join(rest))
+    return die(f"모르는 명령: {cmd} (setup · doctor · run · versions)", 2)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

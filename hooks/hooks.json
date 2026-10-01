@@ -1,0 +1,30 @@
+{
+  "hooks": {
+    "BeforeAgent": [
+      {
+        "hooks": [
+          {
+            "name": "wug-walp-front",
+            "type": "command",
+            "command": "python3 ${extensionPath}${/}hooks${/}front.py",
+            "timeout": 20000,
+            "description": "WALP small-talk front: answers greetings/thanks without calling the model. Prefix // to bypass."
+          }
+        ]
+      }
+    ],
+    "AfterAgent": [
+      {
+        "hooks": [
+          {
+            "name": "wug-flag-gate",
+            "type": "command",
+            "command": "python3 ${extensionPath}${/}hooks${/}flag_gate.py",
+            "timeout": 20000,
+            "description": "Rejects answers that contain fabricated status, gate, loop or version claims and asks for a rewrite."
+          }
+        ]
+      }
+    ]
+  }
+}

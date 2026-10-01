@@ -1,0 +1,22 @@
+{
+  "name": "well-used-gemini",
+  "version": "0.1.0",
+  "description": "Runs Gemini behind runtime-checked gates (se_new agentic pipeline) and checks Gemini CLI's own answers for fabricated status/version claims.",
+  "contextFileName": "GEMINI.md",
+  "settings": [
+    {
+      "name": "Gemini API Key",
+      "description": "Key the agentic pipeline uses to call gemini-3.1-flash-lite (stored in the system keychain).",
+      "envVar": "GEMINI_API_KEY",
+      "sensitive": true
+    }
+  ],
+  "mcpServers": {
+    "agentic": {
+      "command": "python3",
+      "args": ["${extensionPath}${/}wug_mcp.py"],
+      "cwd": "${extensionPath}",
+      "timeout": 1800000
+    }
+  }
+}
