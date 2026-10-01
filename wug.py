@@ -57,6 +57,38 @@ def git(*args, cwd=None, check=True) -> subprocess.CompletedProcess:
     return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=check)
 
 
+MIN_PY = (3, 10)   # se_new 의 walp 가 int.bit_count() 를 쓴다(3.10 부터). 3.9 에서는 WALP 앞단이 AttributeError 로 꺼진다(실측)
+CANDIDATES = ("python3.13", "python3.12", "python3.11", "python3.10")
+SEARCH_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin")   # macOS Homebrew(Apple 칩 · 인텔) · 리눅스
+
+
+def find_python() -> "str | None":
+    """3.10 이상 파이썬을 찾는다: PATH 의 python3.1x, 그다음 Homebrew 자리. 없으면 None."""
+    for name in CANDIDATES:
+        hit = shutil.which(name)
+        if hit:
+            return hit
+    for d in SEARCH_DIRS:
+        for name in CANDIDATES:
+            p = Path(d) / name
+            if p.is_file() and os.access(p, os.X_OK):
+                return str(p)
+    return None
+
+
+def reexec_newer(script: str, argv: list) -> None:
+    """지금 파이썬이 3.10 미만이면 더 새 파이썬으로 이 스크립트를 다시 띄운다(돌아오지 않는다).
+    가상환경이 있으면 그것을 먼저 쓴다 -- setup 이 만든 것이라 3.10 이상이고 requests 도 있다.
+    stdin/stdout 은 그대로 이어진다(Gemini CLI 의 훅 · MCP 통로가 끊기지 않는다)."""
+    if sys.version_info >= MIN_PY or os.environ.get("WUG_REEXEC") == "1":
+        return
+    target = str(venv_python()) if venv_python().exists() else find_python()
+    if not target:
+        return
+    os.environ["WUG_REEXEC"] = "1"            # 두 번 갈아타지 않는다(되돌이 방지)
+    os.execv(target, [target, script, *argv])
+
+
 def venv_python() -> Path:
     return VENV / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 
@@ -91,8 +123,9 @@ def setup(skip_pip: bool = False) -> int:
         return die("git 이 없다")
     co = checkout_dir(lk["commit"])
     WUG_HOME.mkdir(parents=True, exist_ok=True)
-    if sys.version_info < (3, 10):
-        return die(f"파이썬 3.10 이상이 필요하다(지금 {sys.version.split()[0]})")
+    if sys.version_info < MIN_PY:
+        return die(f"파이썬 3.10 이상이 필요하다(지금 {sys.version.split()[0]}, 3.10 이상을 못 찾았다).\n"
+                   "      macOS: brew install python@3.12   그다음 같은 명령을 다시")
     if not (co / ".git").exists():
         print(f"[wug] se_new 를 받는다: {lk['url']} -> {co}")
         r = git("clone", "--quiet", lk["url"], str(co), check=False)
@@ -216,6 +249,11 @@ def main(argv=None) -> int:
         print(__doc__)
         return 0
     cmd, rest = argv[0], argv[1:]
+    if sys.version_info < MIN_PY and os.environ.get("WUG_REEXEC") != "1":
+        target = str(venv_python()) if venv_python().exists() else find_python()
+        if target:
+            print(f"[wug] 지금 파이썬 {sys.version.split()[0]} -- 3.10 이상인 {target} 로 다시 띄운다", file=sys.stderr)
+        reexec_newer(str(Path(__file__).resolve()), argv)
     if cmd == "setup":
         return setup(skip_pip=os.environ.get("WUG_SKIP_PIP") == "1")
     if cmd == "doctor":

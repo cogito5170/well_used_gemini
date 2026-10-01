@@ -20,6 +20,12 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
 
+if __name__ == "__main__":
+    # Gemini CLI 는 훅을 그냥 `python3` 로 띄운다 -- macOS 기본 3.9 일 수 있다. 3.10 미만이면 setup 이 만든
+    # 가상환경의 파이썬으로 갈아탄다(stdin 의 훅 입력은 그대로 이어진다).
+    import wug as _w
+    _w.reexec_newer(str(Path(__file__).resolve()), sys.argv[1:])
+
 
 def _judge_fn():
     import wug

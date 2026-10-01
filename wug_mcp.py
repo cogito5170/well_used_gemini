@@ -100,6 +100,11 @@ def handle(msg: dict) -> "dict | None":
 
 
 def main() -> None:
+    # Gemini CLI 는 이 서버를 그냥 `python3` 로 띄운다 -- macOS 기본 3.9 일 수 있다. 3.10 미만이면 갈아탄다
+    # (exec 이라 JSON-RPC 의 stdin/stdout 은 그대로 이어진다). 이 줄보다 먼저 stdout 에 아무것도 쓰면 안 된다.
+    sys.path.insert(0, str(HERE))
+    import wug
+    wug.reexec_newer(str(Path(__file__).resolve()), sys.argv[1:])
     for line in sys.stdin:
         line = line.strip()
         if not line:

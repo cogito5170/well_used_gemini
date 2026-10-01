@@ -15,6 +15,18 @@ Gemini 를 **런타임이 판정하는 게이트 뒤에서** 돌리는 얇은 �
 > 처음 받은 답의 "MCP version: 0.46.0" 은 **Gemini CLI 의 버전**이었다(CLI 업데이트 알림: 0.46.0 → 0.62.0).
 > MCP 의 프로토콜·SDK·서버 버전이 아니다. 이 저장소는 그 셋을 서버가 실제로 말한 대로 따로 적는다.
 
+## 0. 파이썬 3.10 이상
+
+se_new 의 WALP 코드가 `int.bit_count()`(3.10 부터)를 쓴다. macOS 기본 `python3` 는 3.9 다.
+
+```bash
+brew install python@3.12        # 'brew install python 3.10' 은 안 된다 -- 버전은 이름에 붙인다
+```
+
+깔기만 하면 된다. `wug.py` 는 3.9 로 띄워도 **3.10 이상 파이썬을 스스로 찾아 갈아탄다**(PATH 의 python3.1x,
+`/opt/homebrew/bin`, `/usr/local/bin`). setup 뒤에는 가상환경의 파이썬으로 갈아탄다 -- Gemini CLI 가 훅과 MCP 서버를
+기본 `python3`(3.9)로 띄워도 그렇다.
+
 ## 1. Gemini CLI 확장으로 설치
 
 ```bash

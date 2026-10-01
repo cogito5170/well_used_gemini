@@ -114,6 +114,27 @@ with tempfile.TemporaryDirectory() as tmp:
     code, out = wug("frobnicate")
     ok(code == 2, "모르는 명령은 2")
 
+print("[파이썬] 3.10 미만이면 더 새 파이썬을 찾아 갈아탄다 (macOS 기본 python3 = 3.9)")
+import wug as W  # noqa: E402
+_which, _dirs = W.shutil.which, W.SEARCH_DIRS
+try:
+    W.shutil.which = lambda n: "/x/python3.12" if n == "python3.12" else None
+    ok(W.find_python() == "/x/python3.12", "PATH 의 python3.12 를 찾는다(3.13 이 없으면)")
+    W.shutil.which = lambda n: None
+    with tempfile.TemporaryDirectory() as d:
+        fake = Path(d) / "python3.11"
+        fake.write_text("#!/bin/sh\n")
+        fake.chmod(0o755)
+        W.SEARCH_DIRS = (d,)
+        ok(W.find_python() == str(fake), "PATH 에 없으면 Homebrew 자리(/opt/homebrew/bin 등)에서 찾는다")
+        W.SEARCH_DIRS = ()
+        ok(W.find_python() is None, "아무 데도 없으면 None -- 그때 setup 은 brew 명령을 알려 주고 멈춘다")
+finally:
+    W.shutil.which, W.SEARCH_DIRS = _which, _dirs
+if sys.version_info >= W.MIN_PY:      # 3.9 에서 부르면 정말로 갈아탄다(그것이 맞는 동작이다) -- 그래서 여기서만 본다
+    ok(W.reexec_newer("x", []) is None, "3.10 이상이면 갈아타지 않고 돌아온다")
+ok("int.bit_count" in Path(W.__file__).read_text(), "3.10 이 필요한 까닭(int.bit_count)이 코드에 적혀 있다")
+
 print("[훅] AfterAgent 깃발 게이트")
 import flag_gate  # noqa: E402
 fake_scan = lambda t: [("flag", "NO_LOOP_DETECTED")] if "NO_LOOP" in t else []
