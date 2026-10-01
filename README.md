@@ -27,6 +27,10 @@ brew install python@3.12        # 'brew install python 3.10' 은 안 된다 -- �
 `/opt/homebrew/bin`, `/usr/local/bin`). setup 뒤에는 가상환경의 파이썬으로 갈아탄다 -- Gemini CLI 가 훅과 MCP 서버를
 기본 `python3`(3.9)로 띄워도 그렇다.
 
+**처음 한 번은 느리다.** 도구를 sandbox 안에서 돌리려고 se_new 의 의존성(21개)을 `~/.cache/se-sandbox-deps` 에
+파이썬 버전마다 따로 깐다(여기서 잰 것: 약 2분 30초). 그 뒤로는 캐시를 쓴다. 예전 판이 깐 캐시(이름에
+`cpython-3xx` 가 없는 자리)는 쓰이지 않는다 -- 지워도 된다: `rm -rf ~/.cache/se-sandbox-deps`
+
 ## 1. Gemini CLI 확장으로 설치
 
 ```bash

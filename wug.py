@@ -193,10 +193,16 @@ def _check(label: str, argv: list, want_in: str = "", env=None) -> bool:
     try:
         p = subprocess.run(argv, cwd=co, env=env or child_env(), capture_output=True, text=True, timeout=600)
         ok = p.returncode == 0 and (want_in in p.stdout)
-        tail = (p.stdout + p.stderr).strip().splitlines()[-1:] or [""]
+        lines = (p.stdout + p.stderr).strip().splitlines()
+        # 실패면 **까닭이 적힌 줄**을 보인다 -- 첫 판은 마지막 줄('답: (채택된 답 없음)')만 보여 원인이 안 보였다
+        why = ([l for l in lines if l.startswith(("상태:", "  작업", "  실패", "진단 로그:", "Traceback", "ModuleNotFound",
+                                                     "ImportError"))] or lines[-1:] or [""])
     except (OSError, subprocess.TimeoutExpired) as e:
-        ok, tail = False, [f"{type(e).__name__}"]
-    print(f"  {'통과' if ok else '실패'}  {label}" + ("" if ok else f"  -- {tail[0][:160]}"))
+        ok, why = False, [f"{type(e).__name__} (600초 상한)"]
+    print(f"  {'통과' if ok else '실패'}  {label}")
+    if not ok:
+        for l in why[:6]:
+            print(f"        {l[:200]}")
     return ok
 
 
@@ -217,7 +223,8 @@ def doctor() -> int:
         _check("설정이 정책 A 를 지킨다(agentic.config)", [py, "-c", "import agentic.config as c; print(c.load().model)"],
                "gemini-"),
         _check("MCP 서버와 붙는다(버전 셋)", [py, "-m", "agentic.mcp_client", "--versions", "walp"], '"protocol"'),
-        _check("모델 없이 도는 길: 제어부 + sandbox 실행", [py, "-m", "agentic.run", "agentic/config.json 파일 읽어줘"],
+        _check("모델 없이 도는 길: 제어부 + sandbox 실행 (처음에는 sandbox 의존성을 까느라 몇 분 걸린다)",
+               [py, "-m", "agentic.run", "agentic/config.json 파일 읽어줘"],
                "DONE (controller_tool)"),
     ]
     n = sum(results)
