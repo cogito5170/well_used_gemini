@@ -38,11 +38,17 @@ gemini extensions install https://github.com/cogito5170/well_used_gemini --ref c
 ```
 
 - "Do you trust the files in this folder?" 가 나오면 `y` (확장의 MCP 서버·훅을 돌리려면 필요하다)
-- "Gemini API Key" 를 물으면 넣는다(시스템 키체인에 저장). 건너뛰었으면:
-  `gemini extensions config well-used-gemini "Gemini API Key"`
-- "GitHub Token" 은 **선택**이다. 비우면 공개 저장소만 보이고 `gh_search` 는 안 된다(GitHub 규칙). 비공개까지 보려면
-  GitHub 의 fine-grained 토큰(저장소 cogito5170/*, 권한 Contents: Read-only · Metadata: Read-only)을 만들어 넣는다:
-  `gemini extensions config well-used-gemini "GitHub Token"`
+- **설치 때 키를 묻지 않는다**(0.3.0 부터). 키는 이 차례로 찾는다:
+  1. 환경 변수  2. `~/.cache/well_used_gemini/keys.env` (`wug.py key` 가 쓴다 · 권한 600 · **재설치해도 남는다**)
+  3. 확장 폴더의 `.env`  4. `~/.gemini/.env` (Gemini CLI 가 읽는 그 파일)  5. GitHub 토큰만: `gh auth token`
+- 키를 한 번만 저장한다(입력이 화면에 안 보인다):
+
+```bash
+python3 ~/.gemini/extensions/well-used-gemini/wug.py key            # Gemini API 키
+python3 ~/.gemini/extensions/well-used-gemini/wug.py key github     # 선택: 비공개 저장소 · gh_search
+```
+
+  GitHub 토큰은 fine-grained(저장소 cogito5170/*, Contents: Read-only · Metadata: Read-only)면 된다. 없으면 공개 저장소만.
 - 처음 한 번 준비(se_new 를 고정 커밋으로 받고 가상환경에 `requests`):
 
 ```bash
@@ -58,10 +64,22 @@ python3 ~/.gemini/extensions/well-used-gemini/wug.py doctor     # 점검을 실�
 | `agentic_setup` · `agentic_doctor` · `agentic_versions` | 준비 · 점검 · 고정 커밋/모델/MCP 버전 |
 | `agentic_tools` · `agentic_runs(limit)` · `agentic_report(run_id)` | 등록 도구 · 최근 실행(원장의 끝 상태) · 한 실행의 보고서 |
 | `agentic_memory(query)` · `agentic_repairs` | RAG 기억에서 꺼낸 메모(신뢰 안 함) · 수리 요청 대기열 |
+| `media_info` · `media_ask(paths, question)` | **사진·PDF 받기**: 경로를 주면(터미널에 파일을 끌어다 놓으면 경로가 들어간다) 꼴·해상도·쪽 수, 그리고 Gemini 가 그 파일을 읽고 답한다 |
+| `image_generate(prompt, references, formats, aspect_ratio)` | **그림 만들기**: 이미지 모델로 만들어 jpg · jpeg · png · webp · pdf 로 저장하고 macOS 면 연다. 참고 사진을 같이 줄 수 있다 |
+| `media_convert(paths, format, combine)` | 사진 -> jpg/png/pdf · 여러 장을 PDF 한 권으로 · PDF -> 쪽마다 사진 |
 | `gh_repos` · `gh_tree` · `gh_read` · `gh_commits` · `gh_search` | **cogito5170 저장소 읽기만**. 다른 소유자 · `..` 경로는 요청 전에 거절. 결과 머리에 '신뢰 안 함' |
 | 훅 `BeforeAgent` (WALP 앞단) | 인사·감사 같은 잡담은 모델에 안 보내고 WALP 가 답한다. 일이 담긴 말이었다면 앞에 `//` |
 | 훅 `AfterAgent` (깃발 게이트) | CLI 의 답에 상태·게이트·루프·버전 주장이 있으면 버리고 다시 쓰게 한다. 다시 써도 남으면 경고 |
 | `GEMINI.md` | "일은 agentic_run 으로, 상태·버전은 쓰지 마라" |
+
+### 사진·PDF
+
+- 저장 자리: `~/Pictures/well_used_gemini/` (`WUG_OUT` 으로 바꾼다). 같은 이름이 있으면 `-2` 를 붙인다 -- 덮어쓰지 않는다
+- 이미지 모델 이름은 **적어 두지 않았다.** 키로 API 의 모델 목록을 읽어 `generateContent` 를 받는 `image` 모델을 고른다
+  (미리보기가 아닌 것 먼저). 직접 정하려면 `WUG_IMAGE_MODEL`. 보고서에는 **응답이 밝힌 모델**을 적는다
+- 이 그림 생성은 se_new 의 게이트 파이프라인 **밖**이다 -- 고정 모델(flash-lite) 정책과 다른 모델을 쓴다. 그래서 보고에 모델을 따로 적는다
+- 처음 쓸 때 Pillow · pypdfium2 를 가상환경에 스스로 깐다(사람이 깔 것 없음)
+- 한 요청에 싣는 원본은 18MB 까지(넘으면 보내기 전에 막는다). HEIC 는 읽기(`media_ask`)만 되고 변환은 안 된다
 
 ## 2. 터미널에서 바로
 
@@ -74,6 +92,7 @@ python3 wug.py doctor
 python3 wug.py run "//안녕"           # '//' = 잡담 앞단을 건너뛰고 Gemini 를 진짜로 부른다
 python3 wug.py run "CTLE 가 뭐야"
 python3 wug.py versions
+python3 wug.py media generate '{"prompt": "...", "formats": ["jpg","pdf"]}'
 python3 wug.py inspect runs 5        # 최근 실행 · tools · report <id> · memory "물음" · repairs
 ```
 
@@ -88,7 +107,12 @@ python3 wug.py inspect runs 5        # 최근 실행 · tools · report <id> · 
 - **Gemini CLI 0.46.0 안에서 `BeforeAgent` 훅이 발동** -- `gemini -p "고마워"` 에 WALP 가 답했고 모델 호출 0
 - `tests/test_wug.py` -- 가짜 상류를 지어 끝까지 돌림 · 일곱 가지 코드 변이 모두 빨간불
 
+- 사진·PDF 도구(`tests/test_media.py`) -- 가짜 Gemini 서버를 띄워 진짜 HTTP 길로 받기·내보내기·형식 넷을 돌림.
+  파일은 바이트로 확인(jpg 머리 · `%PDF` · 쪽 수). 코드 변이 여섯 모두 빨간불
+
 **못 함:**
+- **진짜 이미지 모델 호출은 0 건**(여기에 키가 없다). 모델 목록에 image 모델이 실제로 뜨는지, `imageConfig.aspectRatio` 를
+  받는지, 응답이 `inlineData` 로 오는지는 첫 실행이 처음 확인이다. 실패하면 `http_400:...` 처럼 API 의 말을 그대로 보인다
 - **진짜 Gemini 호출은 0 건** -- 키가 없는 자리에서 만들었다. 첫 실행의 `모델:` 줄(확인됨 / 미확인 / 불일치)이 처음 확인이다
 - `AfterAgent` 훅을 **Gemini CLI 안에서** 발동시켜 보지 못했다(모델의 진짜 답이 있어야 발동한다). 훅 단독으로만 확인
 - macOS 에서 돌려 보지 않았다. sandbox 의 메모리 상한은 macOS 에서 걸리지 않을 수 있다(설정 실패를 넘어가게 짜여 있다)

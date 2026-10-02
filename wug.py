@@ -8,6 +8,8 @@ sandbox 실행 · MCP · RAG). 여기는 그것을 **고정된 커밋으로** �
     python3 wug.py doctor             무엇이 준비됐고 무엇이 안 됐는지 -- 키 없이도 도는 점검을 실제로 돌린다
     python3 wug.py run "물음"          agentic.run 을 부른다. 끝값: 0 = DONE, 그 밖 = 그 상태
     python3 wug.py versions           고정 커밋 · 설정 모델 · MCP 버전 셋(서버가 말한 것)
+    python3 wug.py key [gemini|github]  키를 한 번 저장한다(WUG_HOME/keys.env · 권한 600 · 재설치해도 남는다)
+    python3 wug.py media info|ask|generate|convert '<JSON>'   사진·PDF 받기/내보내기(wug_media.py)
     python3 wug.py inspect tools|runs [N]|report ID|memory 물음|repairs   agentic 상태를 읽기만(wug_inspect.py)
 
 규칙(se_new 의 CLAUDE.md 에서 온 것):
@@ -94,21 +96,105 @@ def venv_python() -> Path:
     return VENV / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 
 
+# 키를 어디서 읽나 -- **설치할 때 묻지 않는다.** 확장 설정(settings)은 재설치마다 다시 물어서 뺐다(2026-10-02 사용자).
+#   1. 지금 환경 변수
+#   2. KEY_FILE  -- `wug.py key` 가 한 번 써 둔 것. 확장 폴더 **밖**(WUG_HOME)이라 재설치해도 남는다
+#   3. 확장 폴더의 .env (터미널에서 clone 해 쓰는 경우)
+#   4. ~/.gemini/.env -- Gemini CLI 자체가 읽는 파일. 거기 GEMINI_API_KEY 를 둔 사람은 따로 할 일이 없다
+#   (GitHub 토큰만) 5. `gh auth token` -- gh 로 로그인해 둔 사람
+# 이 이름들 말고는 그 파일들에서 아무것도 안 읽는다.
+KEY_FILE = WUG_HOME / "keys.env"
+GH_NAMES = ("GITHUB_TOKEN",)
+
+
+def env_files() -> list:
+    return [KEY_FILE, ENV_FILE, Path.home() / ".gemini" / ".env"]
+
+
+def read_env_file(path: Path, names=None) -> dict:
+    names = names or (KEY_NAMES + GH_NAMES)
+    out = {}
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return out
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("export "):
+            line = line[7:].strip()
+        if "=" not in line or line.startswith("#"):
+            continue
+        k, v = line.split("=", 1)
+        k, v = k.strip(), v.strip().strip('"').strip("'")
+        if k in names and v and k not in out:
+            out[k] = v
+    return out
+
+
+def _gh_cli_token() -> str:
+    if os.environ.get("WUG_NO_GH_CLI") == "1" or not shutil.which("gh"):
+        return ""
+    try:
+        p = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True, timeout=5)
+        return p.stdout.strip() if p.returncode == 0 else ""
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+def key_sources(env=None) -> dict:
+    """{이름: 어디서 왔나} -- 값은 안 담는다. doctor 가 보인다."""
+    src = {k: "환경 변수" for k in KEY_NAMES + GH_NAMES if (env if env is not None else os.environ).get(k)}
+    for f in env_files():
+        for k in read_env_file(f):
+            src.setdefault(k, str(f))
+    return src
+
+
 def child_env() -> dict:
-    """자식 환경: 지금 환경 + .env 의 Gemini 키(지금 환경에 없을 때만). 다른 줄은 안 읽는다."""
+    """자식 환경: 지금 환경 + 위 파일들의 키(지금 환경에 없을 때만, 앞의 것이 이긴다)."""
     env = dict(os.environ)
-    if ENV_FILE.is_file():
-        for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line.startswith("export "):
-                line = line[7:].strip()
-            if "=" not in line or line.startswith("#"):
-                continue
-            k, v = line.split("=", 1)
-            k, v = k.strip(), v.strip().strip('"').strip("'")
-            if k in KEY_NAMES and v and not env.get(k):
+    for f in env_files():
+        for k, v in read_env_file(f).items():
+            if not env.get(k):
                 env[k] = v
+    if not env.get("GITHUB_TOKEN"):
+        t = _gh_cli_token()
+        if t:
+            env["GITHUB_TOKEN"] = t
     return env
+
+
+def save_key(which: str, value: str) -> int:
+    """KEY_FILE 에 한 줄 쓴다(같은 이름의 옛 줄은 바꾼다). 권한 600. 값은 화면에 안 찍는다."""
+    name = {"gemini": "GEMINI_API_KEY", "github": "GITHUB_TOKEN"}.get(which)
+    if not name:
+        return die(f"모르는 키: {which} (gemini · github)", 2)
+    value = value.strip()
+    if not value or any(c.isspace() for c in value):
+        return die("값이 비었거나 공백이 들어 있다 -- 안 썼다", 2)
+    WUG_HOME.mkdir(parents=True, exist_ok=True)
+    try:
+        old = KEY_FILE.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        old = []
+    lines = [l for l in old if not l.strip().removeprefix("export ").strip().startswith(name + "=")]
+    lines.append(f"{name}={value}")
+    fd = os.open(str(KEY_FILE), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    os.chmod(KEY_FILE, 0o600)
+    print(f"[wug] {name} 를 {KEY_FILE} 에 저장했다(권한 600, 값은 안 찍는다). 재설치해도 남는다")
+    return 0
+
+
+def key_cmd(rest: list) -> int:
+    which = (rest[0] if rest else "gemini").lower()
+    if sys.stdin.isatty():
+        import getpass
+        value = getpass.getpass(f"{which} 키(입력이 화면에 안 보인다): ")
+    else:
+        value = sys.stdin.readline()
+    return save_key(which, value)
 
 
 def has_key(env: dict) -> bool:
@@ -216,8 +302,14 @@ def doctor() -> int:
     lk = lock()
     env = child_env()
     print(f"  통과  se_new 고정 커밋 {lk['commit'][:12]}")
+    src = key_sources()
+    gk = next((src[k] for k in KEY_NAMES if k in src), None)
     print(f"  {'있음' if has_key(env) else '없음'}  Gemini 키 (값은 안 찍는다)"
-          + ("" if has_key(env) else " -- 없으면 모델이 필요한 물음은 BLOCKED(no_api_key) 로 끝난다"))
+          + (f" -- {gk}" if gk else "" if has_key(env) else
+             " -- 없으면 모델이 필요한 물음은 BLOCKED(no_api_key). 한 번만: python3 wug.py key"))
+    print(f"  {'있음' if env.get('GITHUB_TOKEN') else '없음'}  GitHub 토큰 (선택)"
+          + (f" -- {src.get('GITHUB_TOKEN', 'gh auth token')}" if env.get("GITHUB_TOKEN") else
+             " -- 없으면 공개 저장소만. 넣으려면: python3 wug.py key github"))
     py = str(venv_python())
     results = [
         _check("requests 가 가상환경에 있다", [py, "-c", "import requests"]),
@@ -259,6 +351,21 @@ def inspect(rest: list) -> int:
     return p.returncode
 
 
+def media(rest: list) -> int:
+    """wug_media.py 를 가상환경에서. Pillow · pypdfium2 가 없으면 **스스로 한 번 깐다**(사람에게 시키지 않는다)."""
+    if not venv_python().exists():
+        return die("가상환경이 없다 -- python3 wug.py setup")
+    argv = [str(venv_python()), str(HERE / "wug_media.py"), *rest]
+    probe = subprocess.run([str(venv_python()), "-c", "import PIL, pypdfium2, requests"], capture_output=True)
+    if probe.returncode != 0 and os.environ.get("WUG_SKIP_PIP") != "1":
+        print("[wug] 사진·PDF 도구가 쓸 패키지(Pillow · pypdfium2)를 가상환경에 깐다(처음 한 번)", file=sys.stderr)
+        r = subprocess.run([str(venv_python()), "-m", "pip", "install", "--quiet", "--disable-pip-version-check",
+                            "-r", str(HERE / "requirements.txt")], capture_output=True, text=True)
+        if r.returncode != 0:
+            return die(f"pip 실패: {r.stderr.strip()[-400:]}")
+    return subprocess.run(argv, cwd=str(HERE), env=child_env()).returncode
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv or argv[0] in ("-h", "--help", "help"):
@@ -280,9 +387,13 @@ def main(argv=None) -> int:
         if not rest:
             return die('물음이 없다: python3 wug.py run "물음"', 2)
         return run(" ".join(rest))
+    if cmd == "media":
+        return media(rest)
+    if cmd == "key":
+        return key_cmd(rest)
     if cmd == "inspect":
         return inspect(rest)
-    return die(f"모르는 명령: {cmd} (setup · doctor · run · versions · inspect)", 2)
+    return die(f"모르는 명령: {cmd} (setup · doctor · run · versions · key · media · inspect)", 2)
 
 
 if __name__ == "__main__":

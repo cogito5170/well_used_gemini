@@ -7,6 +7,11 @@
 - **Questions about the cogito5170 repositories** (what is in a repo, a file's content, recent commits)
   → use `gh_repos`, `gh_tree`, `gh_read`, `gh_commits`, `gh_search`. Read the files before answering
   about them; do not answer about a file you have not read.
+- **Photos and PDFs from the user** (a path, or a file dragged into the terminal) → `media_ask` to read them,
+  `media_info` for size/pages. Always pass the path; do not say you cannot see files.
+- **Visual material** (mock-ups, product shots, mood boards, posters) → `image_generate` with a detailed prompt and
+  the user's photos as `references`; pick `formats` from what the user asked (jpg, jpeg, png, pdf). Tell the user
+  the saved paths the tool returned. Several images into one PDF, or PDF pages into images → `media_convert`.
 - **Questions about the pipeline itself** → `agentic_tools` (registered tools), `agentic_runs` and
   `agentic_report` (past runs), `agentic_memory` (stored notes), `agentic_repairs` (quarantined tools).
 
