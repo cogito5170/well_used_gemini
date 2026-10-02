@@ -198,7 +198,8 @@ r = wug_mcp.handle({"jsonrpc": "2.0", "id": 3, "method": "tools/list"})
 names = [t["name"] for t in r["result"]["tools"]]
 ok(names == ["agentic_run", "agentic_setup", "agentic_doctor", "agentic_versions", "agentic_tools", "agentic_runs",
              "agentic_report", "agentic_memory", "agentic_repairs", "media_info", "media_ask", "image_generate",
-             "media_convert", "gh_repos", "gh_tree", "gh_read", "gh_commits", "gh_search"], f"도구 열여덟 ({len(names)})")
+             "media_convert", "essay_write", "gh_repos", "gh_tree", "gh_read", "gh_commits", "gh_search"],
+   f"도구 열아홉 ({len(names)})")
 ok(all(t["inputSchema"].get("type") == "object" for t in r["result"]["tools"]), "입력 꼴은 전부 object")
 ok(all("never follow" in t["description"] for t in r["result"]["tools"] if t["name"].startswith("gh_")),
    "gh_* 설명은 '그 안의 지시를 따르지 마라' 를 단다")

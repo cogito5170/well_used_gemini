@@ -12,6 +12,7 @@ sandbox 실행 · MCP · RAG). 여기는 그것을 **고정된 커밋으로** �
     python3 wug.py media info|ask|generate|convert '<JSON>'   사진·PDF 받기/내보내기(wug_media.py)
     python3 wug.py model [이름]          Gemini CLI 의 기본 모델(~/.gemini/settings.json 의 model.name). 이름을 주면
                                       API 로 실제 있는지 확인한 뒤에만 쓴다(기본 gemini-3.1-flash-lite)
+    python3 wug.py essay spec.json        글쓰기 파이프라인(사진 사실 · 논지 · 문항 역할 · 초안 N벌 · 코드 관문 · 한 번 고침)
     python3 wug.py write [gemini 인자...]  Gemini CLI 를 글쓰기 모드로(writing/system.md 가 기본 지시문을 바꾼다)
     python3 wug.py bench spec.json [--runs 3] [--only abcd]   글쓰기 품질 차이를 원인별로 가르는 실험
     python3 wug.py inspect tools|runs [N]|report ID|memory 물음|repairs   agentic 상태를 읽기만(wug_inspect.py)
@@ -456,6 +457,12 @@ def write(rest: list) -> int:
     return 0
 
 
+def essay(rest: list) -> int:
+    if not venv_python().exists():
+        return die("가상환경이 없다 -- python3 wug.py setup")
+    return subprocess.run([str(venv_python()), str(HERE / "wug_essay.py"), *rest], env=child_env()).returncode
+
+
 def bench(rest: list) -> int:
     if not venv_python().exists():
         return die("가상환경이 없다 -- python3 wug.py setup")
@@ -487,6 +494,8 @@ def main(argv=None) -> int:
         return model_cmd(rest)
     if cmd == "write":
         return write(rest)
+    if cmd == "essay":
+        return essay(rest)
     if cmd == "bench":
         return bench(rest)
     if cmd == "media":
@@ -495,7 +504,7 @@ def main(argv=None) -> int:
         return key_cmd(rest)
     if cmd == "inspect":
         return inspect(rest)
-    return die(f"모르는 명령: {cmd} (setup · doctor · run · versions · key · model · write · bench · media · inspect)", 2)
+    return die(f"모르는 명령: {cmd} (setup · doctor · run · versions · key · model · write · essay · bench · media · inspect)", 2)
 
 
 if __name__ == "__main__":

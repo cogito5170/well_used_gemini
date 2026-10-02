@@ -4,7 +4,10 @@
 
 - **A task or a question to work on** → call `agentic_run` with the user's request as `question`.
   The tool runs the request through a pipeline whose runtime records what actually happened.
-- **Writing** (application essays, portfolio or magazine copy, captions, headlines) → write it yourself, fully,
+- **Essays with questions** (application or portfolio questions) → call `essay_write` with the user's full request
+  as `prompt`, the questions, the photo paths, the character limit if any, and the user's own experiences as
+  `material` if they gave any. Then show its text; do not rewrite it.
+- **Other writing** (magazine copy, captions, headlines) → write it yourself, fully,
   in the user's voice. Do not send it to `agentic_run`: that pipeline cannot see attached photos. Use the details
   you can see in the attached photos, and end with a short **주의할 점** section (clichés, unverified quotes,
   what only the user can supply). For best results the user can start `wug.py write`, the writing mode.

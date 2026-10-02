@@ -96,6 +96,17 @@ TOOLS = [
      "inputSchema": {"type": "object", "properties": {
          "paths": _PATHS, "format": {"type": "string", "enum": ["jpg", "jpeg", "png", "webp", "pdf"]},
          "combine": {"type": "boolean"}, "name": _S}, "required": ["paths", "format"]}},
+    {"name": "essay_write", "description": "Write an application essay, portfolio or magazine text with a checked "
+                                           "pipeline: facts from the attached photos, one thesis, a distinct job per "
+                                           "question, several drafts, code gates, one revision. Use this for writing "
+                                           "tasks with questions. Returns the final text and a report path. It never "
+                                           "invents the user's experiences; pass the user's real experiences as material.",
+     "inputSchema": {"type": "object", "properties": {
+         "prompt": {"type": "string", "description": "The user's request in full (context, purpose, tone)."},
+         "questions": {"type": "array", "items": {"type": "string"}},
+         "photos": _PATHS, "limit": {"type": "integer", "description": "Character limit per answer, if any."},
+         "material": {"type": "string", "description": "The user's own real experiences, if given."},
+         "n": {"type": "integer", "minimum": 1, "maximum": 6}}, "required": ["prompt", "questions"]}},
     {"name": "gh_repos", "description": "List repositories of the GitHub owner cogito5170 (private ones only with "
                                         "a GitHub token)." + _UNTRUSTED, "inputSchema": _NOARGS},
     {"name": "gh_tree", "description": "List a folder of a cogito5170 repository. Read-only." + _UNTRUSTED,
@@ -165,6 +176,20 @@ def call(name: str, a: dict) -> "tuple[str, bool]":
             return f"{name}: 인자가 비었다", True
         code, out = _wug("inspect", *sub, timeout=300)
         return out or "(출력 없음)", code != 0
+    if name == "essay_write":
+        import tempfile
+        spec = {k: a[k] for k in ("prompt", "questions", "photos", "limit", "material", "n") if a.get(k) not in (None, "")}
+        if isinstance(spec.get("questions"), str):
+            spec["questions"] = [spec["questions"]]
+        if isinstance(spec.get("photos"), str):
+            spec["photos"] = [spec["photos"]]
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
+            json.dump(spec, f, ensure_ascii=False)
+        try:
+            code, out = _wug("essay", f.name, timeout=1200)
+        finally:
+            os.unlink(f.name)
+        return out or "(출력 없음)", code not in (0, 3)
     if name in ("media_info", "media_ask", "image_generate", "media_convert"):
         sub = {"media_info": "info", "media_ask": "ask", "image_generate": "generate", "media_convert": "convert"}[name]
         for k in ("paths", "references", "formats"):
