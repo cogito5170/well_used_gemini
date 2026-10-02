@@ -8,6 +8,7 @@ sandbox 실행 · MCP · RAG). 여기는 그것을 **고정된 커밋으로** �
     python3 wug.py doctor             무엇이 준비됐고 무엇이 안 됐는지 -- 키 없이도 도는 점검을 실제로 돌린다
     python3 wug.py run "물음"          agentic.run 을 부른다. 끝값: 0 = DONE, 그 밖 = 그 상태
     python3 wug.py versions           고정 커밋 · 설정 모델 · MCP 버전 셋(서버가 말한 것)
+    python3 wug.py inspect tools|runs [N]|report ID|memory 물음|repairs   agentic 상태를 읽기만(wug_inspect.py)
 
 규칙(se_new 의 CLAUDE.md 에서 온 것):
   · **고정 커밋만 쓴다.** se_new 의 main 이 움직여도 여기는 se_new.lock 이 바뀔 때만 바뀐다 -- 남이 받아 가는 것이
@@ -250,6 +251,14 @@ def versions() -> int:
     return 0
 
 
+def inspect(rest: list) -> int:
+    why = _ready()
+    if why:
+        return die(why)
+    p = subprocess.run([str(venv_python()), str(HERE / "wug_inspect.py"), *rest], cwd=co_now(), env=child_env())
+    return p.returncode
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv or argv[0] in ("-h", "--help", "help"):
@@ -271,7 +280,9 @@ def main(argv=None) -> int:
         if not rest:
             return die('물음이 없다: python3 wug.py run "물음"', 2)
         return run(" ".join(rest))
-    return die(f"모르는 명령: {cmd} (setup · doctor · run · versions)", 2)
+    if cmd == "inspect":
+        return inspect(rest)
+    return die(f"모르는 명령: {cmd} (setup · doctor · run · versions · inspect)", 2)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 {
   "name": "well-used-gemini",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Runs Gemini behind runtime-checked gates (se_new agentic pipeline) and checks Gemini CLI's own answers for fabricated status/version claims.",
   "contextFileName": "GEMINI.md",
   "settings": [
@@ -9,12 +9,20 @@
       "description": "Key the agentic pipeline uses to call gemini-3.1-flash-lite (stored in the system keychain).",
       "envVar": "GEMINI_API_KEY",
       "sensitive": true
+    },
+    {
+      "name": "GitHub Token",
+      "description": "Optional. Read-only token for cogito5170 repositories (private repos and code search). Leave empty for public repos only. Stored in the system keychain.",
+      "envVar": "GITHUB_TOKEN",
+      "sensitive": true
     }
   ],
   "mcpServers": {
     "agentic": {
       "command": "python3",
-      "args": ["${extensionPath}${/}wug_mcp.py"],
+      "args": [
+        "${extensionPath}${/}wug_mcp.py"
+      ],
       "cwd": "${extensionPath}",
       "timeout": 1800000
     }

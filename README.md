@@ -40,6 +40,9 @@ gemini extensions install https://github.com/cogito5170/well_used_gemini --ref c
 - "Do you trust the files in this folder?" 가 나오면 `y` (확장의 MCP 서버·훅을 돌리려면 필요하다)
 - "Gemini API Key" 를 물으면 넣는다(시스템 키체인에 저장). 건너뛰었으면:
   `gemini extensions config well-used-gemini "Gemini API Key"`
+- "GitHub Token" 은 **선택**이다. 비우면 공개 저장소만 보이고 `gh_search` 는 안 된다(GitHub 규칙). 비공개까지 보려면
+  GitHub 의 fine-grained 토큰(저장소 cogito5170/*, 권한 Contents: Read-only · Metadata: Read-only)을 만들어 넣는다:
+  `gemini extensions config well-used-gemini "GitHub Token"`
 - 처음 한 번 준비(se_new 를 고정 커밋으로 받고 가상환경에 `requests`):
 
 ```bash
@@ -53,6 +56,9 @@ python3 ~/.gemini/extensions/well-used-gemini/wug.py doctor     # 점검을 실�
 |---|---|
 | MCP 도구 `agentic_run(question)` | 물음을 파이프라인으로 끝까지. **런타임 보고서**를 돌려준다 |
 | `agentic_setup` · `agentic_doctor` · `agentic_versions` | 준비 · 점검 · 고정 커밋/모델/MCP 버전 |
+| `agentic_tools` · `agentic_runs(limit)` · `agentic_report(run_id)` | 등록 도구 · 최근 실행(원장의 끝 상태) · 한 실행의 보고서 |
+| `agentic_memory(query)` · `agentic_repairs` | RAG 기억에서 꺼낸 메모(신뢰 안 함) · 수리 요청 대기열 |
+| `gh_repos` · `gh_tree` · `gh_read` · `gh_commits` · `gh_search` | **cogito5170 저장소 읽기만**. 다른 소유자 · `..` 경로는 요청 전에 거절. 결과 머리에 '신뢰 안 함' |
 | 훅 `BeforeAgent` (WALP 앞단) | 인사·감사 같은 잡담은 모델에 안 보내고 WALP 가 답한다. 일이 담긴 말이었다면 앞에 `//` |
 | 훅 `AfterAgent` (깃발 게이트) | CLI 의 답에 상태·게이트·루프·버전 주장이 있으면 버리고 다시 쓰게 한다. 다시 써도 남으면 경고 |
 | `GEMINI.md` | "일은 agentic_run 으로, 상태·버전은 쓰지 마라" |
@@ -68,6 +74,7 @@ python3 wug.py doctor
 python3 wug.py run "//안녕"           # '//' = 잡담 앞단을 건너뛰고 Gemini 를 진짜로 부른다
 python3 wug.py run "CTLE 가 뭐야"
 python3 wug.py versions
+python3 wug.py inspect runs 5        # 최근 실행 · tools · report <id> · memory "물음" · repairs
 ```
 
 `run` 의 끝값: 0 = DONE, 그 밖 = 그 상태(BLOCKED · NEEDS_REVIEW · LOOP_LIMIT_REACHED · …).
@@ -89,6 +96,16 @@ python3 wug.py versions
 
 **알려진 약점:** WALP 앞단은 일이 섞인 말("고마워요 이제 머지해줘")을 잡담으로 삼킨다(WALP 저장소가 잰 것: 60 문장 중 9~10).
 그래서 잡담으로 답할 때마다 `//` 로 건너뛰는 법을 보인다. 끄려면 `WUG_FRONT=0`.
+
+## 확장 올리기
+
+```bash
+gemini extensions uninstall well-used-gemini
+gemini extensions install https://github.com/cogito5170/well_used_gemini --ref claude/ecstatic-edison-oortg1
+```
+
+(`gemini extensions update` 는 "already up to date" 를 애매하게 낸 적이 있어 지우고 다시 까는 길을 적는다.
+받아 온 se_new 와 가상환경은 확장 폴더 밖이라 그대로 남는다.)
 
 ## se_new 버전 올리기
 
