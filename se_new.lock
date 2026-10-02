@@ -1,5 +1,5 @@
 {
  "url": "https://github.com/cogito5170/se_new",
- "commit": "7c9646427d0435c28723bacfbfd9b4f7a1ba0060",
- "why": "cogito5170/se_new#8 머지 커밋 -- sandbox 안의 명령을 지금 파이썬으로(macOS 에서 python3=3.9 로 떠서 깨지던 것)"
+ "commit": "dd1b4d943e16cdac662a1c5ffcfcfb21eea88f7b",
+ "why": "cogito5170/se_new#9 머지 커밋 -- 등록 도구 6 -> 12(한글 인자 별명 · 탐침 여섯)"
 }
