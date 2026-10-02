@@ -114,6 +114,9 @@ with tempfile.TemporaryDirectory() as tmp:
     ok(oct(kf.stat().st_mode & 0o777) == "0o600", f"keys.env 권한 600 ({oct(kf.stat().st_mode & 0o777)})")
     code, out = wug("key", "gemini", stdin=secret[:-1] + "Z\n")
     ok(kf.read_text().count("GEMINI_API_KEY=") == 1 and secret[:-1] + "Z" in kf.read_text(), "다시 저장하면 옛 줄을 바꾼다(두 줄이 안 된다)")
+    code, out = wug("key", "#", "마지막으로", "(화면에", "안", "보임)", stdin=secret + "\n")
+    ok(code == 0 and f"GEMINI_API_KEY={secret}" in kf.read_text(),
+       "zsh 가 넘긴 '# 설명' 낱말은 버리고 gemini 키로 받는다")
     code, out = wug("key", "gemini", stdin="\n")
     ok(code == 2, "빈 값은 안 쓴다")
     ok(not str(kf).startswith(str(W)), "keys.env 는 확장 폴더 밖이다(재설치가 지우는 자리가 아니다)")

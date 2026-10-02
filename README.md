@@ -20,8 +20,10 @@ Gemini 를 **런타임이 판정하는 게이트 뒤에서** 돌리는 얇은 �
 se_new 의 WALP 코드가 `int.bit_count()`(3.10 부터)를 쓴다. macOS 기본 `python3` 는 3.9 다.
 
 ```bash
-brew install python@3.12        # 'brew install python 3.10' 은 안 된다 -- 버전은 이름에 붙인다
+brew install python@3.12
 ```
+
+(`brew install python 3.10` 은 안 된다 -- 버전은 이름에 붙인다.)
 
 깔기만 하면 된다. `wug.py` 는 3.9 로 띄워도 **3.10 이상 파이썬을 스스로 찾아 갈아탄다**(PATH 의 python3.1x,
 `/opt/homebrew/bin`, `/usr/local/bin`). setup 뒤에는 가상환경의 파이썬으로 갈아탄다 -- Gemini CLI 가 훅과 MCP 서버를
@@ -44,16 +46,19 @@ gemini extensions install https://github.com/cogito5170/well_used_gemini --ref c
 - 키를 한 번만 저장한다(입력이 화면에 안 보인다):
 
 ```bash
-python3 ~/.gemini/extensions/well-used-gemini/wug.py key            # Gemini API 키
-python3 ~/.gemini/extensions/well-used-gemini/wug.py key github     # 선택: 비공개 저장소 · gh_search
+python3 ~/.gemini/extensions/well-used-gemini/wug.py key
+python3 ~/.gemini/extensions/well-used-gemini/wug.py key github
 ```
+
+첫 줄은 Gemini API 키, 둘째 줄은 선택(비공개 저장소 · `gh_search`). **명령 줄에 `# 설명` 을 붙여 붙여넣지 마라** --
+zsh 는 기본으로 `#` 를 주석으로 안 읽어서 `(…)` 가 든 설명이 `unknown file attribute` 로 터진다(실측 2026-10-02).
 
   GitHub 토큰은 fine-grained(저장소 cogito5170/*, Contents: Read-only · Metadata: Read-only)면 된다. 없으면 공개 저장소만.
 - 처음 한 번 준비(se_new 를 고정 커밋으로 받고 가상환경에 `requests`):
 
 ```bash
 python3 ~/.gemini/extensions/well-used-gemini/wug.py setup
-python3 ~/.gemini/extensions/well-used-gemini/wug.py doctor     # 점검을 실제로 돌린다
+python3 ~/.gemini/extensions/well-used-gemini/wug.py doctor
 ```
 
 그다음 Gemini CLI 를 다시 띄우면 이것들이 붙는다:
@@ -87,14 +92,17 @@ python3 ~/.gemini/extensions/well-used-gemini/wug.py doctor     # 점검을 실�
 git clone -b claude/ecstatic-edison-oortg1 https://github.com/cogito5170/well_used_gemini
 cd well_used_gemini
 python3 wug.py setup
-export GEMINI_API_KEY=...            # 또는 이 폴더의 .env 에 GEMINI_API_KEY=... (git 에 안 올라간다)
+export GEMINI_API_KEY=...
 python3 wug.py doctor
-python3 wug.py run "//안녕"           # '//' = 잡담 앞단을 건너뛰고 Gemini 를 진짜로 부른다
+python3 wug.py run "//안녕"
 python3 wug.py run "CTLE 가 뭐야"
 python3 wug.py versions
 python3 wug.py media generate '{"prompt": "...", "formats": ["jpg","pdf"]}'
-python3 wug.py inspect runs 5        # 최근 실행 · tools · report <id> · memory "물음" · repairs
+python3 wug.py inspect runs 5
 ```
+
+`//` 는 잡담 앞단을 건너뛰고 Gemini 를 진짜로 부른다. 키는 `export` 대신 이 폴더의 `.env` 에 `GEMINI_API_KEY=...` 로 둬도 된다
+(git 에 안 올라간다). `inspect` 는 `runs` · `tools` · `report <id>` · `memory "물음"` · `repairs`.
 
 `run` 의 끝값: 0 = DONE, 그 밖 = 그 상태(BLOCKED · NEEDS_REVIEW · LOOP_LIMIT_REACHED · …).
 

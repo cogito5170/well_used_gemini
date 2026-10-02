@@ -188,6 +188,7 @@ def save_key(which: str, value: str) -> int:
 
 
 def key_cmd(rest: list) -> int:
+    rest = [a for a in rest if not a.startswith("#")]     # zsh 는 줄 끝의 '# 설명' 을 인자로 넘긴다
     which = (rest[0] if rest else "gemini").lower()
     if sys.stdin.isatty():
         import getpass
