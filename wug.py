@@ -10,6 +10,8 @@ sandbox 실행 · MCP · RAG). 여기는 그것을 **고정된 커밋으로** �
     python3 wug.py versions           고정 커밋 · 설정 모델 · MCP 버전 셋(서버가 말한 것)
     python3 wug.py key [gemini|github]  키를 한 번 저장한다(WUG_HOME/keys.env · 권한 600 · 재설치해도 남는다)
     python3 wug.py media info|ask|generate|convert '<JSON>'   사진·PDF 받기/내보내기(wug_media.py)
+    python3 wug.py write [gemini 인자...]  Gemini CLI 를 글쓰기 모드로(writing/system.md 가 기본 지시문을 바꾼다)
+    python3 wug.py bench spec.json [--runs 3] [--only abcd]   글쓰기 품질 차이를 원인별로 가르는 실험
     python3 wug.py inspect tools|runs [N]|report ID|memory 물음|repairs   agentic 상태를 읽기만(wug_inspect.py)
 
 규칙(se_new 의 CLAUDE.md 에서 온 것):
@@ -368,6 +370,25 @@ def media(rest: list) -> int:
     return subprocess.run(argv, cwd=str(HERE), env=child_env()).returncode
 
 
+def write(rest: list) -> int:
+    """Gemini CLI 의 기본 지시문("software engineering" · "fewer than 3 lines")을 글쓰기 지시문으로 바꿔 띄운다.
+    Gemini CLI 0.46.0 의 GEMINI_SYSTEM_MD(파일 경로)를 쓴다. GEMINI.md 와 확장 도구는 그대로 붙는다."""
+    gem = shutil.which("gemini")
+    if not gem:
+        return die("gemini 명령이 없다 -- Gemini CLI 가 PATH 에 있어야 한다")
+    sysmd = HERE / "writing" / "system.md"
+    env = {**child_env(), "GEMINI_SYSTEM_MD": str(sysmd), "WUG_MODE": "write"}
+    print(f"[wug] 글쓰기 모드: GEMINI_SYSTEM_MD={sysmd}", file=sys.stderr)
+    os.execvpe(gem, [gem, *rest], env)
+    return 0
+
+
+def bench(rest: list) -> int:
+    if not venv_python().exists():
+        return die("가상환경이 없다 -- python3 wug.py setup")
+    return subprocess.run([str(venv_python()), str(HERE / "wug_bench.py"), *rest], env=child_env()).returncode
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv or argv[0] in ("-h", "--help", "help"):
@@ -389,13 +410,17 @@ def main(argv=None) -> int:
         if not rest:
             return die('물음이 없다: python3 wug.py run "물음"', 2)
         return run(" ".join(rest))
+    if cmd == "write":
+        return write(rest)
+    if cmd == "bench":
+        return bench(rest)
     if cmd == "media":
         return media(rest)
     if cmd == "key":
         return key_cmd(rest)
     if cmd == "inspect":
         return inspect(rest)
-    return die(f"모르는 명령: {cmd} (setup · doctor · run · versions · key · media · inspect)", 2)
+    return die(f"모르는 명령: {cmd} (setup · doctor · run · versions · key · write · bench · media · inspect)", 2)
 
 
 if __name__ == "__main__":

@@ -86,6 +86,44 @@ python3 ~/.gemini/extensions/well-used-gemini/wug.py doctor
 - 처음 쓸 때 Pillow · pypdfium2 를 가상환경에 스스로 깐다(사람이 깔 것 없음)
 - 한 요청에 싣는 원본은 18MB 까지(넘으면 보내기 전에 막는다). HEIC 는 읽기(`media_ask`)만 되고 변환은 안 된다
 
+### 글쓰기 모드 · 글쓰기 실험
+
+Gemini CLI 의 기본 지시문은 코딩용이다(0.46.0 `prompts/snippets.js`: "an interactive CLI agent specializing in
+software engineering tasks" · "Minimal Output: Aim for fewer than 3 lines"). 지원서 · 매거진 글이 짧은 메모체로
+나오는 까닭 하나가 이것이다. 글을 쓸 때는 이렇게 띄운다:
+
+```bash
+python3 ~/.gemini/extensions/well-used-gemini/wug.py write
+```
+
+`GEMINI_SYSTEM_MD=writing/system.md` 로 기본 지시문만 바꾸고, 확장 도구 · GEMINI.md 는 그대로 붙는다. 지시문이 하는 일:
+사진에서 실제로 보이는 것을 쓴다 · 논지 하나 · 문항마다 다른 역할 · 1인칭 평서문(메모체 없음) · 끝에 '주의할 점'
+(상투구 · 출처 미확인 인용 · 사용자만 줄 수 있는 것). 사용자의 삶을 지어내지 않는다.
+
+**실험**(`wug.py bench`) -- 같은 요청 · 같은 사진으로 네 조건을 N 번씩 돌려 차이가 어디서 오는지 가른다:
+
+| 조건 | 무엇 | 가르는 것 |
+|---|---|---|
+| a | Gemini CLI 그대로(`-m` 작은 모델) | a−b = 지시문의 몫 |
+| b | Gemini CLI + 글쓰기 모드 | b−c = CLI 배관(사진 붙이기 · 도구 · GEMINI.md)의 몫 |
+| c | API 직접 · 같은 작은 모델 · 같은 글쓰기 지시문 · 사진 inline | c−d = 모델 크기의 몫 |
+| d | API 직접 · 큰 모델(목록에서 pro, 또는 `--big`) | |
+
+```bash
+cp ~/.gemini/extensions/well-used-gemini/bench/example.json ~/Desktop/spec.json
+python3 ~/.gemini/extensions/well-used-gemini/wug.py bench ~/Desktop/spec.json
+```
+
+`spec.json` 에는 실제로 보냈던 요청 원문(`prompt`), 사진 경로, 그리고 **사람이 사진을 보고 적은** `facts` 를 넣는다.
+결과는 `~/well_used_gemini_bench/<시각>/` 에 `report.md`(코드로 센 대리 지표) · `blind.md`(출처를 가린 글) ·
+`key.json`(열쇠) · `raw/`. 기본 3번 × 4조건 = API 호출 12번 남짓이다.
+
+- 대리 지표(글자 · 사진 사실 · 메모체 비율 · 추상어 · 검토 표지)는 **증상을 센 것이지 글의 질이 아니다.** 질은
+  blind.md 를 읽고 순위를 매긴 뒤 key.json 으로 푼다
+- `facts` 와 추상어 목록은 사람이 정한다. 오늘의 두 답에서 뽑은 목록으로 그 두 답을 재면 갈리는 것이 당연하다
+  (순환) -- 새 실험의 글에 대해서만 뜻이 있다
+- a·b 는 설치된 확장을 그대로 쓴다(WALP 앞단 · 깃발 게이트 · GEMINI.md 가 같이 돈다). 그것이 '지금 쓰는 그대로' 다
+
 ## 2. 터미널에서 바로
 
 ```bash
@@ -117,6 +155,11 @@ python3 wug.py inspect runs 5
 
 - 사진·PDF 도구(`tests/test_media.py`) -- 가짜 Gemini 서버를 띄워 진짜 HTTP 길로 받기·내보내기·형식 넷을 돌림.
   파일은 바이트로 확인(jpg 머리 · `%PDF` · 쪽 수). 코드 변이 여섯 모두 빨간불
+
+- 글쓰기 모드 · 실험(`tests/test_bench.py`) -- 가짜 `gemini` · 가짜 API 로 네 조건 끝까지, 코드 변이 여섯 모두 빨간불.
+  그리고 **진짜 Gemini CLI 0.46.0 번들**을 가짜 응답(`--fake-responses-non-strict`)으로 돌려: 기본 지시문에는
+  "fewer than 3 lines" 가 있고 글쓰기 모드에서는 사라진다(`GEMINI_WRITE_SYSTEM_MD` 로 뽑아 봄) · `-p` 에서
+  `@photo1.jpg` 가 `inlineData image/jpeg` 로 실린다 · `-o json` 의 `stats.models` 키가 응답이 밝힌 모델이다
 
 **못 함:**
 - **진짜 이미지 모델 호출은 0 건**(여기에 키가 없다). 모델 목록에 image 모델이 실제로 뜨는지, `imageConfig.aspectRatio` 를

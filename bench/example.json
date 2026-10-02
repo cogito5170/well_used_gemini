@@ -1,0 +1,13 @@
+{
+  "prompt": "여기에 Gemini 와 Opus 에 실제로 보냈던 요청 원문을 그대로 붙인다. 문항 셋과 매거진 맥락을 포함한다.",
+  "photos": ["~/Desktop/photo1.jpg", "~/Desktop/photo2.jpg"],
+  "facts": [
+    "사진을 보고 사람이 적는다 -- 한 줄에 사실 하나, 동의어는 | 로",
+    "상점 창|쇼윈도|shop window",
+    "코트|coat",
+    "강가|강변|river",
+    "올리브|olive",
+    "파카|parka"
+  ],
+  "runs": 3
+}
