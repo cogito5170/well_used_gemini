@@ -8,7 +8,7 @@ Gemini 를 **런타임이 판정하는 게이트 뒤에서** 돌리는 얇은 �
 |---|---|
 | 모델 하나(`gemini-3.1-flash-lite`) · 폴백 없음 · 응답이 밝힌 모델 대조 | se_new `agentic/model.py` |
 | 상태·루프·Gate01·MCP 칸은 **원장에서만** 그림. 모델이 쓴 깃발은 위조로 거절 | `agentic/render.py` · `agentic/forgery.py` |
-| WALP 앞단(잡담은 모델 호출 0) → 제어부(등록 도구, LLM 없는 라우팅) → 사고부(ReAct · 루프 탐지기) | `agentic/front.py` · `controller.py` · `thinker.py` |
+| 제어부(등록 도구, LLM 없는 라우팅) → 사고부(ReAct · 루프 탐지기). WALP 앞단은 2026-10-02 에 뺐다 | `controller.py` · `thinker.py` |
 | 도구는 sandbox(HEAD 워크트리)에서만 · 회로 차단기 · 수리 요청 | `agentic/tools.py` · `breaker.py` |
 | MCP 버전 세 갈래(protocol · sdk · server) · RAG/Graph 기억 | `agentic/mcp_client.py` · `memory.py` |
 
@@ -17,7 +17,7 @@ Gemini 를 **런타임이 판정하는 게이트 뒤에서** 돌리는 얇은 �
 
 ## 0. 파이썬 3.10 이상
 
-se_new 의 WALP 코드가 `int.bit_count()`(3.10 부터)를 쓴다. macOS 기본 `python3` 는 3.9 다.
+se_new 의 `walp/grownet.py` 가 `int.bit_count()`(3.10 부터)를 쓴다. macOS 기본 `python3` 는 3.9 다.
 
 ```bash
 brew install python@3.12
@@ -73,7 +73,6 @@ python3 ~/.gemini/extensions/well-used-gemini/wug.py doctor
 | `image_generate(prompt, references, formats, aspect_ratio)` | **그림 만들기**: 이미지 모델로 만들어 jpg · jpeg · png · webp · pdf 로 저장하고 macOS 면 연다. 참고 사진을 같이 줄 수 있다 |
 | `media_convert(paths, format, combine)` | 사진 -> jpg/png/pdf · 여러 장을 PDF 한 권으로 · PDF -> 쪽마다 사진 |
 | `gh_repos` · `gh_tree` · `gh_read` · `gh_commits` · `gh_search` | **cogito5170 저장소 읽기만**. 다른 소유자 · `..` 경로는 요청 전에 거절. 결과 머리에 '신뢰 안 함' |
-| 훅 `BeforeAgent` (WALP 앞단) | 인사·감사 같은 잡담은 모델에 안 보내고 WALP 가 답한다. 일이 담긴 말이었다면 앞에 `//` |
 | 훅 `AfterAgent` (깃발 게이트) | CLI 의 답에 상태·게이트·루프·버전 주장이 있으면 버리고 다시 쓰게 한다. 다시 써도 남으면 경고 |
 | `GEMINI.md` | "일은 agentic_run 으로, 상태·버전은 쓰지 마라" |
 
@@ -85,6 +84,21 @@ python3 ~/.gemini/extensions/well-used-gemini/wug.py doctor
 - 이 그림 생성은 se_new 의 게이트 파이프라인 **밖**이다 -- 고정 모델(flash-lite) 정책과 다른 모델을 쓴다. 그래서 보고에 모델을 따로 적는다
 - 처음 쓸 때 Pillow · pypdfium2 를 가상환경에 스스로 깐다(사람이 깔 것 없음)
 - 한 요청에 싣는 원본은 18MB 까지(넘으면 보내기 전에 막는다). HEIC 는 읽기(`media_ask`)만 되고 변환은 안 된다
+
+### 기본 모델
+
+```bash
+python3 ~/.gemini/extensions/well-used-gemini/wug.py model gemini-3.1-flash-lite
+```
+
+이름이 **API 에 실제로 있고 generateContent 를 받는지** 키로 확인한 뒤에만 `~/.gemini/settings.json` 의 `model.name`
+하나를 바꾼다(옛 파일은 `.bak-<시각>` 으로 남긴다 · 주석이 든 파일은 안 건드린다). 인자 없이 부르면 지금 값과 확인 결과를 보인다.
+
+- 이름의 근거: Gemini CLI 0.46.0 `models.js` 의 `DEFAULT_GEMINI_FLASH_LITE_MODEL = 'gemini-3.1-flash-lite'`
+  ("Gemini 3.1 Flash Lite is now GA"). `-preview` 가 붙은 것은 옛 이름이다
+- Gemini CLI 가 모델을 고르는 차례: `-m` > 환경 변수 `GEMINI_MODEL` > `settings.json` 의 `model.name` > `auto`
+- 진짜 CLI 번들로 확인: 설정이 없으면 `auto` 가 `gemini-3.1-pro-preview` 로, `gemini-3.1-flash-lite` 는 그대로 간다.
+  CLI 가 이름을 바꿔 치는 경우도 있다(`gemini-2.5-flash` -> `gemini-3.5-flash`). 그래서 `/stats` 로 실제 모델을 본다
 
 ### 글쓰기 모드 · 글쓰기 실험
 
@@ -122,7 +136,7 @@ python3 ~/.gemini/extensions/well-used-gemini/wug.py bench ~/Desktop/spec.json
   blind.md 를 읽고 순위를 매긴 뒤 key.json 으로 푼다
 - `facts` 와 추상어 목록은 사람이 정한다. 오늘의 두 답에서 뽑은 목록으로 그 두 답을 재면 갈리는 것이 당연하다
   (순환) -- 새 실험의 글에 대해서만 뜻이 있다
-- a·b 는 설치된 확장을 그대로 쓴다(WALP 앞단 · 깃발 게이트 · GEMINI.md 가 같이 돈다). 그것이 '지금 쓰는 그대로' 다
+- a·b 는 설치된 확장을 그대로 쓴다(깃발 게이트 · GEMINI.md 가 같이 돈다). 그것이 '지금 쓰는 그대로' 다
 
 ## 2. 터미널에서 바로
 
@@ -132,14 +146,14 @@ cd well_used_gemini
 python3 wug.py setup
 export GEMINI_API_KEY=...
 python3 wug.py doctor
-python3 wug.py run "//안녕"
+python3 wug.py run "안녕"
 python3 wug.py run "CTLE 가 뭐야"
 python3 wug.py versions
 python3 wug.py media generate '{"prompt": "...", "formats": ["jpg","pdf"]}'
 python3 wug.py inspect runs 5
 ```
 
-`//` 는 잡담 앞단을 건너뛰고 Gemini 를 진짜로 부른다. 키는 `export` 대신 이 폴더의 `.env` 에 `GEMINI_API_KEY=...` 로 둬도 된다
+키는 `export` 대신 이 폴더의 `.env` 에 `GEMINI_API_KEY=...` 로 둬도 된다
 (git 에 안 올라간다). `inspect` 는 `runs` · `tools` · `report <id>` · `memory "물음"` · `repairs`.
 
 `run` 의 끝값: 0 = DONE, 그 밖 = 그 상태(BLOCKED · NEEDS_REVIEW · LOOP_LIMIT_REACHED · …).
@@ -150,7 +164,6 @@ python3 wug.py inspect runs 5
 - `setup` -- 진짜 se_new 를 고정 커밋으로 받고 가상환경을 만듦(약 8초). `doctor` 4/4
 - 확장 MCP 서버 -- MCP 클라이언트로 붙어 도구 넷 · `agentic_run` 이 런타임 보고서를 돌려줌
 - **Gemini CLI 0.46.0 에 실제로 설치** -- `gemini extensions list` 에 MCP 서버·컨텍스트·키 설정이 잡힘
-- **Gemini CLI 0.46.0 안에서 `BeforeAgent` 훅이 발동** -- `gemini -p "고마워"` 에 WALP 가 답했고 모델 호출 0
 - `tests/test_wug.py` -- 가짜 상류를 지어 끝까지 돌림 · 일곱 가지 코드 변이 모두 빨간불
 
 - 사진·PDF 도구(`tests/test_media.py`) -- 가짜 Gemini 서버를 띄워 진짜 HTTP 길로 받기·내보내기·형식 넷을 돌림.
@@ -169,8 +182,7 @@ python3 wug.py inspect runs 5
 - macOS 에서 돌려 보지 않았다. sandbox 의 메모리 상한은 macOS 에서 걸리지 않을 수 있다(설정 실패를 넘어가게 짜여 있다)
 - Gemini CLI 가 MCP 도구 결과를 화면에 얼마나 보여 주는지 확인하지 않았다
 
-**알려진 약점:** WALP 앞단은 일이 섞인 말("고마워요 이제 머지해줘")을 잡담으로 삼킨다(WALP 저장소가 잰 것: 60 문장 중 9~10).
-그래서 잡담으로 답할 때마다 `//` 로 건너뛰는 법을 보인다. 끄려면 `WUG_FRONT=0`.
+**WALP 앞단(잡담 가로채기)은 2026-10-02 사용자 요청으로 뺐다** -- 훅 · se_new 의 agentic/front.py 둘 다.
 
 ## 확장 올리기
 

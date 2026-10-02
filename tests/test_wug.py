@@ -184,16 +184,8 @@ ok("decision" not in r and "경고" in r["systemMessage"], "다시 쓴 답에도
 ok(flag_gate.decide({"prompt_response": "CTLE 설명"}, fake_scan) == {}, "깨끗하면 통과")
 ok("NO_LOOP" not in flag_gate.RETRY and "A_TO_B" not in flag_gate.RETRY, "다시 쓰라는 말에 깃발 어휘를 안 알려 준다")
 
-print("[훅] BeforeAgent WALP 앞단")
-import front  # noqa: E402
-
-
-class R:
-    def __init__(self, route, reply=None):
-        self.route, self.reply, self.data = route, reply, {"ms": 1.0}
-d = front.decide("고마워", lambda t: R("small", "천만에요."))
-ok(d["decision"] == "deny" and "천만에요." in d["systemMessage"] and "//" in d["systemMessage"], "잡담 -> deny + 답 + 건너뛰는 법")
-ok(front.decide("지어", lambda t: R("model")) == {}, "일이면 그대로 모델로")
+print("[훅] WALP 앞단은 없다(2026-10-02 사용자 요청으로 뺐다)")
+ok(not (ROOT / "hooks" / "front.py").exists(), "hooks/front.py 가 없다")
 
 print("[MCP] 서버")
 import wug_mcp  # noqa: E402
@@ -306,12 +298,79 @@ finally:
     if _tok is not None:
         os.environ["GITHUB_TOKEN"] = _tok
 
+print("[모델] wug.py model -- API 로 있는지 확인한 뒤에만 settings.json 의 model.name 하나를 바꾼다")
+import threading  # noqa: E402
+from http.server import BaseHTTPRequestHandler, HTTPServer  # noqa: E402
+
+
+class _M(BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def do_GET(self):
+        name = self.path.split("/models/", 1)[1]
+        if self.headers.get("x-goog-api-key") != "AIzaMODELTEST":
+            code, body = 403, {"error": {"message": "bad key"}}
+        elif name == "gemini-3.1-flash-lite":
+            code, body = 200, {"name": "models/gemini-3.1-flash-lite", "displayName": "Gemini 3.1 Flash-Lite",
+                               "inputTokenLimit": 1048576, "supportedGenerationMethods": ["generateContent"]}
+        elif name == "embed-x":
+            code, body = 200, {"name": "models/embed-x", "supportedGenerationMethods": ["embedContent"]}
+        else:
+            code, body = 404, {"error": {"message": "not found"}}
+        b = json.dumps(body).encode()
+        self.send_response(code)
+        self.send_header("Content-Length", str(len(b)))
+        self.end_headers()
+        self.wfile.write(b)
+
+
+_srv = HTTPServer(("127.0.0.1", 0), _M)
+threading.Thread(target=_srv.serve_forever, daemon=True).start()
+with tempfile.TemporaryDirectory() as tmp:
+    H = Path(tmp)
+    (H / ".gemini").mkdir()
+    sp = H / ".gemini" / "settings.json"
+    sp.write_text(json.dumps({"model": {"name": "auto", "maxSessionTurns": 5}, "ui": {"theme": "x"}}))
+    base = {**os.environ, "HOME": str(H), "WUG_HOME": str(H / "wh"), "WUG_NO_GH_CLI": "1",
+            "WUG_GEMINI_API": f"http://127.0.0.1:{_srv.server_port}/v1beta", "NO_PROXY": "127.0.0.1",
+            "no_proxy": "127.0.0.1"}
+    for k_ in ("GEMINI_API_KEY", "GEMINI_MODEL"):
+        base.pop(k_, None)
+
+    def m(*a, key=True):
+        p = subprocess.run([sys.executable, str(ROOT / "wug.py"), "model", *a], capture_output=True, text=True,
+                           env={**base, **({"GEMINI_API_KEY": "AIzaMODELTEST"} if key else {})}, timeout=60)
+        return p.returncode, p.stdout + p.stderr
+    before = sp.read_text()
+    code, out = m("gemini-3.1-flash-lite", key=False)
+    ok(code == 1 and sp.read_text() == before and "키가 없어" in out, "키가 없으면 확인 못 함 -> 안 쓴다")
+    code, out = m("gemini-3.1-flash-lite-previe")
+    ok(code == 1 and sp.read_text() == before and "404" in out, "API 가 모르는 이름(오타)은 안 쓴다")
+    code, out = m("embed-x")
+    ok(code == 1 and sp.read_text() == before, "generateContent 를 안 받는 모델은 안 쓴다")
+    code, out = m("gemini-3.1-flash-lite")
+    d = json.loads(sp.read_text())
+    ok(code == 0 and d == {"model": {"name": "gemini-3.1-flash-lite", "maxSessionTurns": 5}, "ui": {"theme": "x"}},
+       f"model.name 만 바꾸고 나머지는 그대로 ({d})")
+    baks = list((H / ".gemini").glob("settings.json.bak-*"))
+    ok(len(baks) == 1 and json.loads(baks[0].read_text())["model"]["name"] == "auto", "옛 설정을 .bak 으로 남긴다")
+    code, out = m()
+    ok(code == 0 and "gemini-3.1-flash-lite" in out and "있음" in out, "인자 없이 부르면 지금 값과 API 확인을 보인다")
+    sp.write_text('{\n  // 주석\n  "ui": {}\n}\n')
+    code, out = m("gemini-3.1-flash-lite")
+    ok(code == 1 and "// 주석" in sp.read_text() and "덮어쓰지 않는다" in out, "주석이 든 settings.json 은 안 건드린다")
+    sp.unlink()
+    code, out = m("gemini-3.1-flash-lite")
+    ok(code == 0 and json.loads(sp.read_text()) == {"model": {"name": "gemini-3.1-flash-lite"}}, "파일이 없으면 새로 만든다")
+_srv.shutdown()
+
 print("[확장] 매니페스트 · 훅 파일 꼴 (Gemini CLI 0.46.0 문서 · 로더 기준)")
 m = json.loads((ROOT / "gemini-extension.json").read_text())
 ok(m["name"] == "well-used-gemini" and m["contextFileName"] == "GEMINI.md", "이름(소문자·대시) · 컨텍스트 파일")
 ok("settings" not in m, "설치 때 키를 묻지 않는다(settings 없음) -- 키는 wug key · ~/.gemini/.env 에서")
 h = json.loads((ROOT / "hooks" / "hooks.json").read_text())
-ok(isinstance(h.get("hooks"), dict) and set(h["hooks"]) == {"BeforeAgent", "AfterAgent"}, "hooks.json 최상위는 hooks 객체")
+ok(isinstance(h.get("hooks"), dict) and set(h["hooks"]) == {"AfterAgent"}, "hooks.json 최상위는 hooks 객체")
 g = (ROOT / "GEMINI.md").read_text()
 ok("NO_LOOP" not in g and "A_TO_B" not in g and "RED_RED" not in g, "GEMINI.md 에 깃발 어휘가 없다(알려 주면 흉내 낸다)")
 

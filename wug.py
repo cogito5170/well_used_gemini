@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """well_used_gemini -- Gemini 를 정책 게이트 뒤에서 돌리는 얇은 진입점.
 
-실제 일은 `cogito5170/se_new` 의 `agentic/` 이 한다(WALP 앞단 · 제어부 · Gate01 · 사고부(ReAct) · 루프 탐지기 ·
+실제 일은 `cogito5170/se_new` 의 `agentic/` 이 한다(제어부 · Gate01 · 사고부(ReAct) · 루프 탐지기 ·
 sandbox 실행 · MCP · RAG). 여기는 그것을 **고정된 커밋으로** 받아 와서 부르기만 한다.
 
     python3 wug.py setup              se_new 를 se_new.lock 의 커밋으로 받고(~/.cache/well_used_gemini/), 가상환경에 requests
@@ -10,6 +10,8 @@ sandbox 실행 · MCP · RAG). 여기는 그것을 **고정된 커밋으로** �
     python3 wug.py versions           고정 커밋 · 설정 모델 · MCP 버전 셋(서버가 말한 것)
     python3 wug.py key [gemini|github]  키를 한 번 저장한다(WUG_HOME/keys.env · 권한 600 · 재설치해도 남는다)
     python3 wug.py media info|ask|generate|convert '<JSON>'   사진·PDF 받기/내보내기(wug_media.py)
+    python3 wug.py model [이름]          Gemini CLI 의 기본 모델(~/.gemini/settings.json 의 model.name). 이름을 주면
+                                      API 로 실제 있는지 확인한 뒤에만 쓴다(기본 gemini-3.1-flash-lite)
     python3 wug.py write [gemini 인자...]  Gemini CLI 를 글쓰기 모드로(writing/system.md 가 기본 지시문을 바꾼다)
     python3 wug.py bench spec.json [--runs 3] [--only abcd]   글쓰기 품질 차이를 원인별로 가르는 실험
     python3 wug.py inspect tools|runs [N]|report ID|memory 물음|repairs   agentic 상태를 읽기만(wug_inspect.py)
@@ -28,6 +30,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import venv
 from pathlib import Path
 
@@ -62,7 +65,7 @@ def git(*args, cwd=None, check=True) -> subprocess.CompletedProcess:
     return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=check)
 
 
-MIN_PY = (3, 10)   # se_new 의 walp 가 int.bit_count() 를 쓴다(3.10 부터). 3.9 에서는 WALP 앞단이 AttributeError 로 꺼진다(실측)
+MIN_PY = (3, 10)   # se_new 의 walp/grownet.py 가 int.bit_count() 를 쓴다(3.10 부터)
 CANDIDATES = ("python3.13", "python3.12", "python3.11", "python3.10")
 SEARCH_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin")   # macOS Homebrew(Apple 칩 · 인텔) · 리눅스
 
@@ -327,7 +330,7 @@ def doctor() -> int:
     n = sum(results)
     print(f"[wug] 점검 {n}/{len(results)} 통과" + ("" if n == len(results) else " -- 실패한 줄을 먼저 본다"))
     if n == len(results) and has_key(env):
-        print('[wug] 다음: python3 wug.py run "//안녕"   (// = 잡담 앞단을 건너뛰고 Gemini 를 진짜로 부른다)')
+        print('[wug] 다음: python3 wug.py run "안녕"')
     return 0 if n == len(results) else 1
 
 
@@ -370,6 +373,76 @@ def media(rest: list) -> int:
     return subprocess.run(argv, cwd=str(HERE), env=child_env()).returncode
 
 
+GEMINI_API = os.environ.get("WUG_GEMINI_API", "https://generativelanguage.googleapis.com/v1beta")
+DEFAULT_CLI_MODEL = "gemini-3.1-flash-lite"   # Gemini CLI 0.46.0 models.js: DEFAULT_GEMINI_FLASH_LITE_MODEL ('now GA')
+
+
+def gemini_settings_path() -> Path:
+    return Path.home() / ".gemini" / "settings.json"
+
+
+def check_model(name: str, env: dict) -> "tuple[bool | None, str]":
+    """(True 있음 | False 없음 | None 모름, 설명). 키로 GET models/<이름> -- 목록에 기대지 않고 그 이름 하나를 묻는다."""
+    import urllib.error
+    import urllib.request
+    key = next((env.get(k) for k in KEY_NAMES if env.get(k)), "")
+    if not key:
+        return None, "키가 없어 API 로 확인 못 한다 -- python3 wug.py key"
+    req = urllib.request.Request(f"{GEMINI_API}/models/{name}", headers={"x-goog-api-key": key})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            d = json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return False, f"API 가 '{name}' 을 모른다(404)"
+        return None, f"API 조회 실패 http_{e.code}"
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        return None, f"API 조회 실패 {type(e).__name__}"
+    meth = d.get("supportedGenerationMethods") or []
+    if "generateContent" not in meth:
+        return False, f"'{name}' 은 있지만 generateContent 를 안 받는다({', '.join(meth) or '없음'})"
+    return True, f"API 확인: {d.get('name')} · {d.get('displayName', '')} · 입력 {d.get('inputTokenLimit')} 토큰"
+
+
+def model_cmd(rest: list) -> int:
+    """Gemini CLI 가 기본 모델을 고르는 차례(0.46.0 코드): -m > 환경 변수 GEMINI_MODEL > settings.json 의 model.name > auto."""
+    env = child_env()
+    sp = gemini_settings_path()
+    try:
+        cur = json.loads(sp.read_text(encoding="utf-8")) if sp.is_file() else {}
+        parse_err = None
+    except (ValueError, OSError) as e:
+        cur, parse_err = None, e
+    if not rest:
+        now = (cur or {}).get("model", {}).get("name") if isinstance((cur or {}).get("model"), dict) else None
+        print(f"settings.json model.name: {now or '(없음 -> auto)'}  ({sp})")
+        if os.environ.get("GEMINI_MODEL"):
+            print(f"환경 변수 GEMINI_MODEL={os.environ['GEMINI_MODEL']} -- settings.json 보다 이긴다")
+        ok, why = check_model(now or DEFAULT_CLI_MODEL, env)
+        print(f"{'있음' if ok else '없음' if ok is False else '모름'}: {why}")
+        return 0
+    name = rest[0].strip()
+    ok, why = check_model(name, env)
+    print(f"[wug] {why}")
+    if ok is not True:
+        return die("확인되지 않은 이름은 쓰지 않는다 -- 모르는 것은 안 된 것으로 다룬다", 1)
+    if parse_err is not None or not isinstance(cur, dict):
+        return die(f"{sp} 를 JSON 으로 못 읽었다(주석이 있을 수 있다) -- 덮어쓰지 않는다. 직접 넣어라: "
+                   f'"model": {{"name": "{name}"}}', 1)
+    sp.parent.mkdir(parents=True, exist_ok=True)
+    if sp.is_file():
+        bak = sp.with_name(f"settings.json.bak-{time.strftime('%Y%m%d-%H%M%S')}")
+        shutil.copy2(sp, bak)
+        print(f"[wug] 옛 설정을 남겼다: {bak}")
+    m = cur.get("model") if isinstance(cur.get("model"), dict) else {}
+    cur["model"] = {**m, "name": name}
+    sp.write_text(json.dumps(cur, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(f"[wug] {sp} 의 model.name = {name} -- Gemini CLI 를 다시 띄우면 기본 모델이다")
+    if os.environ.get("GEMINI_MODEL"):
+        print(f"[wug] 주의: 환경 변수 GEMINI_MODEL={os.environ['GEMINI_MODEL']} 가 이것보다 이긴다")
+    return 0
+
+
 def write(rest: list) -> int:
     """Gemini CLI 의 기본 지시문("software engineering" · "fewer than 3 lines")을 글쓰기 지시문으로 바꿔 띄운다.
     Gemini CLI 0.46.0 의 GEMINI_SYSTEM_MD(파일 경로)를 쓴다. GEMINI.md 와 확장 도구는 그대로 붙는다."""
@@ -410,6 +483,8 @@ def main(argv=None) -> int:
         if not rest:
             return die('물음이 없다: python3 wug.py run "물음"', 2)
         return run(" ".join(rest))
+    if cmd == "model":
+        return model_cmd(rest)
     if cmd == "write":
         return write(rest)
     if cmd == "bench":
@@ -420,7 +495,7 @@ def main(argv=None) -> int:
         return key_cmd(rest)
     if cmd == "inspect":
         return inspect(rest)
-    return die(f"모르는 명령: {cmd} (setup · doctor · run · versions · key · write · bench · media · inspect)", 2)
+    return die(f"모르는 명령: {cmd} (setup · doctor · run · versions · key · model · write · bench · media · inspect)", 2)
 
 
 if __name__ == "__main__":
