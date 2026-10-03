@@ -38,7 +38,48 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import wug_github as GH  # noqa: E402
 SUPPORTED = ("2025-06-18", "2025-03-26", "2024-11-05")
-VERSION = "0.2"
+VERSION = "0.3"
+# CMD-WUG1 S3: 도구 결과는 Gemini CLI 의 대화 기록에 그대로 남고, 0.62.0 에서는 모델 요청마다 그 기록 전체를
+# JSON 으로 한 벌 더 붙든다(텔레메트리를 끄면 비우지 않는 telemetryBuffer -- 실측). 그래서 결과를 짧게 낸다:
+# RESULT_CAP 자를 넘으면 앞부분 + result_id 만 돌려주고, 전체는 디스크(WUG_HOME/results)에 둔다. result_read 로 이어 읽는다.
+RESULT_CAP = 4000
+_RID = __import__("re").compile(r"^[0-9a-f]{16}$")
+
+
+def _results_dir() -> Path:
+    import wug
+    d = wug.WUG_HOME / "results"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def cap_result(text: str, cap: int = RESULT_CAP) -> str:
+    if len(text) <= cap:
+        return text
+    import hashlib
+    rid = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+    p = _results_dir() / f"{rid}.txt"
+    if not p.exists():
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(text, encoding="utf-8")
+        tmp.replace(p)
+    return (text[:cap] + f"\n… [잘림: 전체 {len(text)}자 중 {cap}자 · result_id {rid} · "
+            f"이어 읽기: result_read(result_id=\"{rid}\", offset={cap})]")
+
+
+def read_result(rid: str, offset: int = 0, length: int = RESULT_CAP) -> "tuple[str, bool]":
+    if not _RID.match(rid or ""):
+        return "result_id 꼴이 틀렸다(16자리 16진수)", True
+    p = _results_dir() / f"{rid}.txt"
+    if not p.is_file():
+        return f"그런 결과가 없다: {rid}", True
+    text = p.read_text(encoding="utf-8")
+    offset = max(0, int(offset))
+    length = max(1, min(int(length), RESULT_CAP))
+    part = text[offset:offset + length]
+    end = offset + len(part)
+    return (f"[result {rid} · {offset}..{end} / {len(text)}자]\n" + part
+            + (f"\n… [다음: offset={end}]" if end < len(text) else "\n[끝]")), False
 _NOARGS = {"type": "object", "properties": {}}
 _S = {"type": "string"}
 _REPO = {"type": "string", "description": "Repository name under cogito5170, e.g. 'se_new' or 'cogito5170/se_new'. "
@@ -107,6 +148,10 @@ TOOLS = [
          "photos": _PATHS, "limit": {"type": "integer", "description": "Character limit per answer, if any."},
          "material": {"type": "string", "description": "The user's own real experiences, if given."},
          "n": {"type": "integer", "minimum": 1, "maximum": 6}}, "required": ["prompt", "questions"]}},
+    {"name": "result_read", "description": "Read more of a long tool result that was cut. Pass the result_id and offset "
+                                           "shown at the end of the cut result. Returns up to 4000 characters." + _UNTRUSTED,
+     "inputSchema": {"type": "object", "properties": {"result_id": _S, "offset": {"type": "integer", "minimum": 0},
+                     "length": {"type": "integer", "minimum": 1, "maximum": 4000}}, "required": ["result_id"]}},
     {"name": "gh_repos", "description": "List repositories of the GitHub owner cogito5170 (private ones only with "
                                         "a GitHub token)." + _UNTRUSTED, "inputSchema": _NOARGS},
     {"name": "gh_tree", "description": "List a folder of a cogito5170 repository. Read-only." + _UNTRUSTED,
@@ -155,6 +200,11 @@ def call(name: str, a: dict) -> "tuple[str, bool]":
         if not q:
             return "question 이 비었다", True
         code, out = _wug("run", q)
+        m = __import__("re").search(r"quota_wait:(minute|day):(\d+)", out)
+        if m:   # CMD-WUG1 S7: 한도는 실패가 아니다 -- 기다렸다가 같은 물음을 다시 부르면 된다
+            wait = f"{m.group(2)} s" if m.group(1) == "minute" and int(m.group(2)) > 0 else (
+                "다음 날 한도 재설정까지" if m.group(1) == "day" else "1분 안팎")
+            return f"quota wait {wait} -- 모델 한도에 걸렸다({m.group(1)}). 기다린 뒤 같은 물음을 다시 부른다.\n\n" + out, False
         return out + f"\n\n[wug] 끝값 {code}" + ("" if code == 0 else " (DONE 이 아니다)"), code != 0
     if name == "agentic_setup":
         code, out = _wug("setup", timeout=1800)
@@ -176,6 +226,11 @@ def call(name: str, a: dict) -> "tuple[str, bool]":
             return f"{name}: 인자가 비었다", True
         code, out = _wug("inspect", *sub, timeout=300)
         return out or "(출력 없음)", code != 0
+    if name == "result_read":
+        try:
+            return read_result(str(a.get("result_id", "")), a.get("offset", 0) or 0, a.get("length", RESULT_CAP) or RESULT_CAP)
+        except (TypeError, ValueError):
+            return "offset · length 는 정수여야 한다", True
     if name == "essay_write":
         import tempfile
         spec = {k: a[k] for k in ("prompt", "questions", "photos", "limit", "material", "n") if a.get(k) not in (None, "")}
@@ -189,14 +244,14 @@ def call(name: str, a: dict) -> "tuple[str, bool]":
             code, out = _wug("essay", f.name, timeout=1200)
         finally:
             os.unlink(f.name)
-        return out or "(출력 없음)", code not in (0, 3)
+        return out or "(출력 없음)", code not in (0, 3, 4)          # 3 = hard 남음 · 4 = quota wait
     if name in ("media_info", "media_ask", "image_generate", "media_convert"):
         sub = {"media_info": "info", "media_ask": "ask", "image_generate": "generate", "media_convert": "convert"}[name]
         for k in ("paths", "references", "formats"):
             if isinstance(a.get(k), str):          # 모델이 배열 대신 글 하나를 주면 받아 준다
                 a = {**a, k: [a[k]]}
         code, out = _wug("media", sub, json.dumps(a, ensure_ascii=False), timeout=600)
-        return out or "(출력 없음)", code != 0
+        return out or "(출력 없음)", code not in (0, 4)          # 4 = quota wait (실패가 아니다)
     s = lambda k: str(a.get(k) or "")
     if name == "gh_repos":
         return _gh(GH.repos)
@@ -232,7 +287,7 @@ def handle(msg: dict) -> "dict | None":
             if name not in {t["name"] for t in TOOLS}:
                 return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32602, "message": f"unknown tool: {name}"}}
             text, err = call(name, p.get("arguments") or {})
-            res = {"content": [{"type": "text", "text": text}], "isError": err}
+            res = {"content": [{"type": "text", "text": cap_result(text)}], "isError": err}
         else:
             return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": f"unknown method: {method}"}}
         return {"jsonrpc": "2.0", "id": mid, "result": res}

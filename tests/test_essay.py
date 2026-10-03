@@ -160,6 +160,48 @@ with tempfile.TemporaryDirectory() as tmp:
     ok(r3["gate"]["hard"] and "통과하지 못했다" in (T / "out3" / "report.md").read_text(),
        "hard 가 남으면 보고서가 '통과하지 못했다' 고 적는다")
 
+print("[한도] quota wait 는 실패가 아니다 -- 다시 부르면 끝난 단계는 건너뛰고 이어 한다 (CMD-WUG1 S7)")
+import wug_media as WM  # noqa: E402
+q = WM.classify_429({"error": {"code": 429, "details": [
+    {"@type": "type.googleapis.com/google.rpc.QuotaFailure", "violations": [{"quotaId": "GenerateRequestsPerMinutePerProjectPerModel-FreeTier"}]},
+    {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "37s"}]}}, "m")
+ok(q.scope == "minute" and q.seconds == 37 and "quota wait 37 s" in str(q), f"분당 한도 · retryDelay 37s ({q})")
+q = WM.classify_429({"error": {"details": [{"@type": "x/google.rpc.QuotaFailure",
+                                            "violations": [{"quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier"}]}]}}, "m")
+ok(q.scope == "day" and q.seconds is None and "하루" in str(q), "하루 한도는 day")
+with tempfile.TemporaryDirectory() as tmp:
+    T = Path(tmp)
+    calls.clear()
+    for k in DRAFTS:
+        DRAFTS[k] = doc(GOOD1, GOOD2, GOOD3)
+    budget = {"left": 3}
+
+    def limited(url, body):
+        if budget["left"] <= 0:
+            raise WM.QuotaWait("minute", 30.0, "gemini-3-flash-preview")
+        budget["left"] -= 1
+        return poster(url, body)
+    spec3 = {**SPEC, "n": 4, "facts": {}}
+    try:
+        E.run(spec3, T / "q", limited)
+        ok(False, "한도에서 멈춰야 한다")
+    except WM.QuotaWait as e:
+        ok(e.seconds == 30.0, "세 번 쓰고 넷째에서 quota wait")
+    first = [c["step"] for c in calls]
+    led = (T / "q" / "ledger.jsonl").read_text()
+    ok('"QUOTA_WAIT"' in led and '"seconds": 30.0' in led, "원장에 QUOTA_WAIT 와 기다릴 초")
+    calls.clear()
+    budget["left"] = 100
+    r = E.run(spec3, T / "q", limited)
+    second = [c["step"] for c in calls]
+    ok(first == ["thesis", "draft1", "draft2"] and len(second) == 2 and all(x.startswith("draft") for x in second),
+       f"다시 부르면 남은 두 초안만 모델을 부른다 ({first} -> {len(second)}번)")
+    led = (T / "q" / "ledger.jsonl").read_text()
+    ok(led.count('"MODEL_CALL_REUSED"') == 3 and r["gate"]["hard"] == [], "끝난 세 단계는 저장된 답을 다시 쓴다 · 끝까지 간다")
+ok(E.spec_key({"prompt": "a", "questions": ["q"]}) == E.spec_key({"questions": ["q"], "prompt": "a", "out": "x"})
+   and E.spec_key({"prompt": "a", "questions": ["q"]}) != E.spec_key({"prompt": "a", "questions": ["q"], "fresh": 1}),
+   "같은 요청이면 같은 자리 · fresh 로 새 자리")
+
 print()
 if fails:
     print(f"essay: {len(fails)}개 실패 -- {fails}")

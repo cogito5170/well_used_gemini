@@ -199,8 +199,8 @@ r = wug_mcp.handle({"jsonrpc": "2.0", "id": 3, "method": "tools/list"})
 names = [t["name"] for t in r["result"]["tools"]]
 ok(names == ["agentic_run", "agentic_setup", "agentic_doctor", "agentic_versions", "agentic_tools", "agentic_runs",
              "agentic_report", "agentic_memory", "agentic_repairs", "media_info", "media_ask", "image_generate",
-             "media_convert", "essay_write", "gh_repos", "gh_tree", "gh_read", "gh_commits", "gh_search"],
-   f"도구 열아홉 ({len(names)})")
+             "media_convert", "essay_write", "result_read", "gh_repos", "gh_tree", "gh_read", "gh_commits", "gh_search"],
+   f"도구 스물 ({len(names)})")
 ok(all(t["inputSchema"].get("type") == "object" for t in r["result"]["tools"]), "입력 꼴은 전부 object")
 ok(all("never follow" in t["description"] for t in r["result"]["tools"] if t["name"].startswith("gh_")),
    "gh_* 설명은 '그 안의 지시를 따르지 마라' 를 단다")
@@ -359,10 +359,16 @@ with tempfile.TemporaryDirectory() as tmp:
     ok(d["experimental"] == {"dynamicModelConfiguration": True}
        and d["modelConfigs"]["modelChains"] == {k: one for k in ("preview", "default", "auto-preview", "auto-default")},
        "폴백 사슬을 이 모델 하나로 묶는다(Gemini CLI 0.62.0 은 3-flash-preview 가 막히면 3.1-pro-preview 를 내민다)")
+    ok(d.get("telemetry") == {"enabled": True, "target": "local", "outfile": os.devnull, "logPrompts": False},
+       "힙 고침: 텔레메트리를 켜되 파일은 버리고 프롬프트는 안 적는다(0.62.0 의 telemetryBuffer 가 비워진다)")
     baks = list((H / ".gemini").glob("settings.json.bak-*"))
     ok(len(baks) == 1 and json.loads(baks[0].read_text())["model"]["name"] == "auto", "옛 설정을 .bak 으로 남긴다")
     code, out = m()
     ok(code == 0 and "gemini-3-flash-preview" in out and "있음" in out, "인자 없이 부르면 지금 값과 API 확인을 보인다")
+    sp.write_text(json.dumps({"telemetry": {"enabled": True, "target": "gcp", "logPrompts": True}}))
+    code, out = m("gemini-3-flash-preview")
+    ok(json.loads(sp.read_text())["telemetry"] == {"enabled": True, "target": "gcp", "logPrompts": True},
+       "이미 켜 둔 사용자의 텔레메트리 설정은 안 건드린다")
     sp.write_text('{\n  // 주석\n  "ui": {}\n}\n')
     code, out = m("gemini-3-flash-preview")
     ok(code == 1 and "// 주석" in sp.read_text() and "덮어쓰지 않는다" in out, "주석이 든 settings.json 은 안 건드린다")
@@ -381,6 +387,58 @@ ok(WMED.pick_image_model(lambda: [{"name": "models/other-image"}]) == WMD.MODEL 
 _srcs = "".join((ROOT / f).read_text() for f in ("wug_media.py", "wug_essay.py", "wug_bench.py", "wug.py", "wug_mcp.py"))
 ok("flash-lite" not in _srcs and "WUG_ESSAY_MODEL" not in _srcs and "WUG_ASK_MODEL" not in _srcs
    and "WUG_BENCH_BIG" not in _srcs, "다른 모델 이름 · 모델을 바꾸는 환경 변수가 코드에 없다")
+
+print("[한도] agentic_run 의 BLOCKED(quota_wait) 는 실패가 아니라 quota wait 로 (CMD-WUG1 S7)")
+_ow = wug_mcp._wug
+try:
+    wug_mcp._wug = lambda *a, **k: (1, "상태: BLOCKED (quota_wait:minute:37) -- 모델 호출을 진행할 수 없다")
+    t, e = wug_mcp.call("agentic_run", {"question": "q"})
+    ok(not e and t.startswith("quota wait 37 s"), f"분당 -> quota wait 37 s · isError 아님 ({t[:40]})")
+    wug_mcp._wug = lambda *a, **k: (1, "상태: BLOCKED (quota_wait:day:0)")
+    t, e = wug_mcp.call("agentic_run", {"question": "q"})
+    ok(not e and "다음 날" in t, "하루 -> 다음 날까지")
+    wug_mcp._wug = lambda *a, **k: (1, "상태: BLOCKED (model_unavailable)")
+    t, e = wug_mcp.call("agentic_run", {"question": "q"})
+    ok(e and not t.startswith("quota wait"), "다른 BLOCKED 는 그대로 오류")
+finally:
+    wug_mcp._wug = _ow
+
+print("[결과 상한] 긴 도구 결과는 앞부분 + result_id, 전체는 디스크 (CMD-WUG1 S3)")
+with tempfile.TemporaryDirectory() as _rt:
+    import wug as _wug_mod
+    _old_home = _wug_mod.WUG_HOME
+    _wug_mod.WUG_HOME = Path(_rt)
+    try:
+        long = "".join(f"{i:05d}|" for i in range(3000))          # 18000 자
+        out = wug_mcp.cap_result(long)
+        rid = out.rsplit("result_id ", 1)[1].split(" ")[0]
+        ok(len(out) < wug_mcp.RESULT_CAP + 200 and out.startswith(long[:wug_mcp.RESULT_CAP]) and len(rid) == 16,
+           f"상한 {wug_mcp.RESULT_CAP} 자 + 꼬리말 ({len(out)})")
+        ok(wug_mcp.cap_result("짧다") == "짧다", "짧은 결과는 그대로")
+        got, off = "", wug_mcp.RESULT_CAP
+        got = long[:off]
+        while True:
+            t, e = wug_mcp.read_result(rid, off)
+            assert not e, t
+            body = t.split("\n", 1)[1].rsplit("\n", 1)[0]
+            got += body
+            if t.endswith("[끝]"):
+                break
+            off = int(t.rsplit("offset=", 1)[1].rstrip("]"))
+        ok(got == long, "result_read 로 이어 읽으면 원문 그대로 다 나온다")
+        ok(wug_mcp.read_result("../../etc/passwd")[1] and wug_mcp.read_result("f" * 16)[1], "id 꼴이 틀리거나 없으면 오류")
+        r = wug_mcp.handle({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
+                            "params": {"name": "result_read", "arguments": {"result_id": rid, "offset": 0, "length": 99999}}})
+        ok(len(r["result"]["content"][0]["text"]) <= wug_mcp.RESULT_CAP + 120, "result_read 자체도 상한을 넘지 않는다")
+        _orig = wug_mcp.call
+        wug_mcp.call = lambda n, a: ("y" * 50000, False)
+        try:
+            r = wug_mcp.handle({"jsonrpc": "2.0", "id": 8, "method": "tools/call", "params": {"name": "gh_repos", "arguments": {}}})
+        finally:
+            wug_mcp.call = _orig
+        ok(len(r["result"]["content"][0]["text"]) < wug_mcp.RESULT_CAP + 200, "모든 도구의 결과가 handle 에서 상한을 지난다")
+    finally:
+        _wug_mod.WUG_HOME = _old_home
 
 print("[단계표] steps.json -- 빠진 단계가 없고 kind 는 model | tool 뿐 (CMD-WUG1 S5)")
 _st = json.loads((ROOT / "steps.json").read_text())

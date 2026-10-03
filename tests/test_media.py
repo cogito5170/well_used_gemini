@@ -70,6 +70,11 @@ class Fake(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         seen.append(("POST", self.path, self.headers.get("x-goog-api-key"), body))
+        if "quotahit" in json.dumps(body):
+            return self._send(429, {"error": {"code": 429, "status": "RESOURCE_EXHAUSTED", "details": [
+                {"@type": "type.googleapis.com/google.rpc.QuotaFailure",
+                 "violations": [{"quotaId": "GenerateRequestsPerMinutePerProjectPerModel-FreeTier"}]},
+                {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "41s"}]}})
         if "broken" in json.dumps(body):
             return self._send(400, {"error": {"message": f"bad key {KEY} rejected"}})
         if "IMAGE" in json.dumps(body.get("generationConfig") or {}):
@@ -158,6 +163,17 @@ with tempfile.TemporaryDirectory() as tmp:
             ok(False, want)
         except M.MediaError as e:
             ok(want in str(e) and KEY not in str(e), f"거절: {want} (키는 가림)")
+    try:
+        M.ask([str(T / "b.png")], "quotahit")
+        ok(False, "quota wait 가 나야 한다")
+    except M.QuotaWait as q:
+        ok(q.scope == "minute" and q.seconds == 41 and "quota wait 41 s" in str(q) and KEY not in str(q),
+           "진짜 HTTP 429 -> quota wait 41 s (실패가 아니라 기다릴 일)")
+    import contextlib
+    _buf = io.StringIO()
+    with contextlib.redirect_stdout(_buf):
+        code = M.main(["ask", json.dumps({"paths": [str(T / "b.png")], "question": "quotahit"})])
+    ok(code == 4 and "quota wait 41 s" in _buf.getvalue(), "명령의 끝값 4 · 화면에 quota wait")
     big = T / "big.png"
     Image.frombytes("RGB", (3000, 3000), os.urandom(3000 * 3000 * 3)).save(big, "PNG", compress_level=0)
     try:

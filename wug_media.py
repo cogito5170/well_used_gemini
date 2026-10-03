@@ -39,6 +39,30 @@ class MediaError(RuntimeError):
     pass
 
 
+class QuotaWait(MediaError):
+    """한도에 걸렸다 -- 실패가 아니라 기다릴 일이다(CMD-WUG1 S7). scope: minute | day. seconds: API 가 준 retryDelay(없으면 None)."""
+    def __init__(self, scope: str, seconds, model: str):
+        self.scope, self.seconds, self.model = scope, seconds, model
+        wait = f"{int(seconds)} s" if seconds is not None else ("다음 날 한도 재설정까지" if scope == "day" else "모름")
+        super().__init__(f"quota wait {wait} -- {model} {'하루' if scope == 'day' else '분당'} 한도. "
+                         f"끝난 단계는 저장돼 있다; 같은 요청을 다시 부르면 이어서 한다")
+
+
+def classify_429(err: dict, model: str) -> QuotaWait:
+    """Gemini API 429 몸통 -> QuotaWait. quotaId 에 PerDay 가 있으면 하루 한도, 아니면 분당. retryDelay('37s') 를 읽는다."""
+    details = (err.get("error") or {}).get("details") or []
+    day, secs = False, None
+    for d in details:
+        t = str(d.get("@type", ""))
+        if t.endswith("QuotaFailure"):
+            day = day or any("PerDay" in str(v.get("quotaId", "")) for v in d.get("violations") or [])
+        elif t.endswith("RetryInfo"):
+            m = re.match(r"^\s*(\d+(?:\.\d+)?)s\s*$", str(d.get("retryDelay", "")))
+            if m:
+                secs = float(m.group(1))
+    return QuotaWait("day" if day else "minute", secs, model)
+
+
 def _key() -> str:
     k = (os.environ.get("GEMINI_API_KEY") or "").strip()
     if not k:
@@ -160,6 +184,11 @@ def _post(model: str, body: dict, poster=None) -> dict:
                           json=body, timeout=300)
     except requests.RequestException as e:
         raise MediaError(_hide(f"network:{type(e).__name__}")) from None
+    if r.status_code == 429:
+        try:
+            raise classify_429(r.json(), model)
+        except ValueError:
+            raise QuotaWait("minute", None, model) from None
     if r.status_code != 200:
         try:
             msg = r.json().get("error", {}).get("message", "")
@@ -319,6 +348,9 @@ def main(argv) -> int:
         else:
             print(f"모르는 명령: {cmd}", file=sys.stderr)
             return 2
+    except QuotaWait as q:
+        print(f"[media] {q}")                      # 실패가 아니라 기다릴 일 -- 끝값 4
+        return 4
     except MediaError as e:
         print(f"[media] {_hide(str(e))}", file=sys.stderr)
         return 1

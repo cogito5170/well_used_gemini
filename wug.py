@@ -13,6 +13,7 @@ sandbox 실행 · MCP · RAG). 여기는 그것을 **고정된 커밋으로** �
     python3 wug.py model [이름]          Gemini CLI 의 기본 모델(~/.gemini/settings.json 의 model.name). 이름을 주면
                                       API 로 실제 있는지 확인한 뒤에만 쓴다(기본 wug_model.MODEL) · 폴백 없는 사슬도 같이 쓴다
     python3 wug.py essay spec.json        글쓰기 파이프라인(사진 사실 · 논지 · 문항 역할 · 초안 N벌 · 코드 관문 · 한 번 고침)
+    python3 wug.py cli [gemini 인자...]    Gemini CLI 를 힙 임시방편(8 GB · 한계 근처 스냅숏)으로 띄운다
     python3 wug.py write [gemini 인자...]  Gemini CLI 를 글쓰기 모드로(writing/system.md 가 기본 지시문을 바꾼다)
     python3 wug.py bench spec.json [--runs 3] [--only abcd]   글쓰기 품질 차이를 원인별로 가르는 실험
     python3 wug.py inspect tools|runs [N]|report ID|memory 물음|repairs   agentic 상태를 읽기만(wug_inspect.py)
@@ -367,12 +368,16 @@ def cli_check() -> bool:
     pinned = (cur.get("experimental") or {}).get("dynamicModelConfiguration") is True and all(
         chains.get(k) == [{"model": DEFAULT_CLI_MODEL, "isLastResort": True}] for k in NO_FALLBACK_CHAINS)
     ok_m = name == DEFAULT_CLI_MODEL and pinned
+    tel = cur.get("telemetry") if isinstance(cur.get("telemetry"), dict) else {}
+    ok_t = tel.get("enabled") is True
+    print(f"  {'통과' if ok_t else '실패'}  힙 고침: telemetry.enabled {'켜짐' if ok_t else '꺼짐 -- 0.62.0 은 이때 모델 요청마다 대화 전체를 붙들고 안 비운다'}"
+          + ("" if ok_t else f"  (python3 wug.py model {DEFAULT_CLI_MODEL})"))
     print(f"  {'통과' if ok_m else '실패'}  CLI 기본 모델 {name or '(없음 -> auto)'} · 폴백 사슬 {'하나로 묶임' if pinned else '안 묶임'}"
           + ("" if ok_m else f"  (python3 wug.py model {DEFAULT_CLI_MODEL})"))
     if os.environ.get("GEMINI_MODEL") and os.environ["GEMINI_MODEL"] != DEFAULT_CLI_MODEL:
         print(f"  실패  환경 변수 GEMINI_MODEL={os.environ['GEMINI_MODEL']} 가 settings.json 보다 이긴다")
         ok_m = False
-    return ok_v and ok_m
+    return ok_v and ok_m and ok_t
 
 
 def versions() -> int:
@@ -444,6 +449,27 @@ def check_model(name: str, env: dict) -> "tuple[bool | None, str]":
     return True, f"API 확인: {d.get('name')} · {d.get('displayName', '')} · 입력 {d.get('inputTokenLimit')} 토큰"
 
 
+HEAP_FIX_TELEMETRY = {"enabled": True, "target": "local", "outfile": os.devnull, "logPrompts": False}
+# 임시방편(CMD-WUG1 S4) -- 고침이 아니다. 우리 실행기(wug.py write · cli)만 건다. 다시 나면 힙 스냅숏이 WUG_HOME/heap 에 남는다
+STOPGAP_NODE_OPTIONS = "--max-old-space-size=8192 --heapsnapshot-near-heap-limit=1"
+
+
+def stopgap_env(env: dict) -> dict:
+    d = WUG_HOME / "heap"
+    d.mkdir(parents=True, exist_ok=True)
+    extra = f"{STOPGAP_NODE_OPTIONS} --diagnostic-dir={d}"
+    return {**env, "NODE_OPTIONS": (env.get("NODE_OPTIONS", "") + " " + extra).strip()}
+
+
+def cli(rest: list) -> int:
+    """Gemini CLI 를 임시방편 힙 설정으로 띄운다(지시문은 기본 그대로). 고침은 settings.json 의 telemetry 칸이다."""
+    gem = shutil.which("gemini")
+    if not gem:
+        return die("gemini 명령이 없다 -- Gemini CLI 가 PATH 에 있어야 한다")
+    os.execvpe(gem, [gem, *rest], stopgap_env(child_env()))
+    return 0
+
+
 def model_cmd(rest: list) -> int:
     """Gemini CLI 가 기본 모델을 고르는 차례(0.46.0 코드): -m > 환경 변수 GEMINI_MODEL > settings.json 의 model.name > auto."""
     env = child_env()
@@ -483,6 +509,11 @@ def model_cmd(rest: list) -> int:
     cur["modelConfigs"] = {**mc, "modelChains": {**(mc.get("modelChains") or {}), **chains}}
     ex = cur.get("experimental") if isinstance(cur.get("experimental"), dict) else {}
     cur["experimental"] = {**ex, "dynamicModelConfiguration": True}
+    # 힙 고침(CMD-WUG1 S3): 0.62.0 은 텔레메트리가 꺼져 있으면 모델 요청마다 대화 전체를 JSON 으로 한 벌씩
+    # telemetryBuffer 에 붙들고 영영 안 비운다(실측: 1174 -> 30 KB/turn). 켜 두되 파일은 버리고 프롬프트는 안 적는다.
+    tel = cur.get("telemetry") if isinstance(cur.get("telemetry"), dict) else {}
+    if not tel.get("enabled"):
+        cur["telemetry"] = {**tel, **HEAP_FIX_TELEMETRY}
     sp.write_text(json.dumps(cur, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"[wug] {sp} 의 model.name = {name} · 폴백 사슬 = [{name}] 하나 -- Gemini CLI 를 다시 띄우면 적용된다")
     if os.environ.get("GEMINI_MODEL"):
@@ -497,7 +528,7 @@ def write(rest: list) -> int:
     if not gem:
         return die("gemini 명령이 없다 -- Gemini CLI 가 PATH 에 있어야 한다")
     sysmd = HERE / "writing" / "system.md"
-    env = {**child_env(), "GEMINI_SYSTEM_MD": str(sysmd), "WUG_MODE": "write"}
+    env = stopgap_env({**child_env(), "GEMINI_SYSTEM_MD": str(sysmd), "WUG_MODE": "write"})
     print(f"[wug] 글쓰기 모드: GEMINI_SYSTEM_MD={sysmd}", file=sys.stderr)
     os.execvpe(gem, [gem, *rest], env)
     return 0
@@ -536,6 +567,8 @@ def main(argv=None) -> int:
         if not rest:
             return die('물음이 없다: python3 wug.py run "물음"', 2)
         return run(" ".join(rest))
+    if cmd == "cli":
+        return cli(rest)
     if cmd == "model":
         return model_cmd(rest)
     if cmd == "write":
@@ -550,7 +583,7 @@ def main(argv=None) -> int:
         return key_cmd(rest)
     if cmd == "inspect":
         return inspect(rest)
-    return die(f"모르는 명령: {cmd} (setup · doctor · run · versions · key · model · write · essay · bench · media · inspect)", 2)
+    return die(f"모르는 명령: {cmd} (setup · doctor · run · versions · key · model · cli · write · essay · bench · media · inspect)", 2)
 
 
 if __name__ == "__main__":

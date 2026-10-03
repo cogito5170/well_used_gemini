@@ -3,57 +3,362 @@
  "for": "CMD-WUG1 rev 3 S5 -- every step of well_used_gemini's pipeline, classified model or tool. kind is closed: model = calls Gemini (counts against the RPM/RPD budget); tool = no model call (runs while the model budget is spent). model_calls is per step execution.",
  "model": "gemini-3-flash-preview",
  "steps": [
-  {"id": "mcp.agentic_run", "kind": "model", "where": "wug_mcp.py -> wug.py run -> se_new agentic.run.run", "model_calls": "0..budgets.model_calls (4)", "parallel_ok": false, "note": "composite: the agentic.* steps below; 0 model calls when the controller finishes with a registered tool"},
-  {"id": "agentic.run_start", "kind": "tool", "where": "se_new agentic/run.py run (RUN_START)", "model_calls": 0, "parallel_ok": true},
-  {"id": "agentic.controller_route", "kind": "tool", "where": "se_new agentic/controller.py try_tools -> walp.se_router.route", "model_calls": 0, "parallel_ok": true, "note": "LLM-free routing"},
-  {"id": "agentic.controller_precheck", "kind": "tool", "where": "se_new agentic/controller.py precheck", "model_calls": 0, "parallel_ok": true},
-  {"id": "agentic.tool_exec", "kind": "tool", "where": "se_new agentic/tools.py sandbox_execute (HEAD worktree)", "model_calls": 0, "parallel_ok": true, "note": "one registered tool; 12 registered"},
-  {"id": "agentic.gate01", "kind": "tool", "where": "se_new agentic/sequencer.py chain_in / gate01.py", "model_calls": 0, "parallel_ok": false},
-  {"id": "agentic.memory_recall", "kind": "tool", "where": "se_new agentic/memory.py recall", "model_calls": 0, "parallel_ok": true},
-  {"id": "agentic.thinker_turn", "kind": "model", "where": "se_new agentic/thinker.py think -> FixedModel.turn", "model_calls": 1, "parallel_ok": false, "note": "ReAct turn; at most budgets.react_turns (6) per run"},
-  {"id": "agentic.thinker_tool_call", "kind": "tool", "where": "se_new agentic/thinker.py think -> sandbox_execute", "model_calls": 0, "parallel_ok": true, "note": "function calls returned by one thinker turn"},
-  {"id": "agentic.forgery_scan", "kind": "tool", "where": "se_new agentic/forgery.py scan", "model_calls": 0, "parallel_ok": true},
-  {"id": "agentic.loop_eval", "kind": "tool", "where": "se_new agentic/loop.py", "model_calls": 0, "parallel_ok": true},
-  {"id": "agentic.memory_record", "kind": "tool", "where": "se_new agentic/memory.py record", "model_calls": 0, "parallel_ok": false},
-  {"id": "agentic.render", "kind": "tool", "where": "se_new agentic/render.py render", "model_calls": 0, "parallel_ok": true},
-
-  {"id": "mcp.essay_write", "kind": "model", "where": "wug_mcp.py -> wug.py essay -> wug_essay.run", "model_calls": "photos + 1 + n + (0|1)", "parallel_ok": false, "note": "composite: the essay.* steps below"},
-  {"id": "essay.facts", "kind": "model", "where": "wug_essay.py step_facts", "model_calls": 1, "parallel_ok": true, "note": "one per photo without human facts; 0 when spec.facts is given"},
-  {"id": "essay.roles", "kind": "tool", "where": "wug_essay.py assign_roles", "model_calls": 0, "parallel_ok": true},
-  {"id": "essay.thesis", "kind": "model", "where": "wug_essay.py step_thesis", "model_calls": 1, "parallel_ok": false},
-  {"id": "essay.points_clean", "kind": "tool", "where": "wug_essay.py clean_points", "model_calls": 0, "parallel_ok": true},
-  {"id": "essay.draft", "kind": "model", "where": "wug_essay.py step_drafts", "model_calls": 1, "parallel_ok": true, "note": "n per run (default 4); independent of each other"},
-  {"id": "essay.gate", "kind": "tool", "where": "wug_essay.py gate", "model_calls": 0, "parallel_ok": true},
-  {"id": "essay.select", "kind": "tool", "where": "wug_essay.py run (rank_key)", "model_calls": 0, "parallel_ok": false},
-  {"id": "essay.revise", "kind": "model", "where": "wug_essay.py step_revise", "model_calls": 1, "parallel_ok": false, "note": "0 when the chosen draft has no violation"},
-  {"id": "essay.report", "kind": "tool", "where": "wug_essay.py report", "model_calls": 0, "parallel_ok": false},
-
-  {"id": "mcp.media_ask", "kind": "model", "where": "wug_mcp.py -> wug_media.ask", "model_calls": 1, "parallel_ok": true},
-  {"id": "mcp.image_generate", "kind": "model", "where": "wug_mcp.py -> wug_media.generate", "model_calls": 1, "parallel_ok": true},
-  {"id": "image.save", "kind": "tool", "where": "wug_media.py _save", "model_calls": 0, "parallel_ok": true},
-  {"id": "mcp.media_info", "kind": "tool", "where": "wug_media.py info", "model_calls": 0, "parallel_ok": true},
-  {"id": "mcp.media_convert", "kind": "tool", "where": "wug_media.py convert", "model_calls": 0, "parallel_ok": true},
-
-  {"id": "mcp.agentic_setup", "kind": "tool", "where": "wug.py setup", "model_calls": 0, "parallel_ok": false},
-  {"id": "mcp.agentic_doctor", "kind": "tool", "where": "wug.py doctor", "model_calls": 0, "parallel_ok": false, "note": "its checks never call the model"},
-  {"id": "mcp.agentic_versions", "kind": "tool", "where": "wug.py versions", "model_calls": 0, "parallel_ok": true},
-  {"id": "mcp.agentic_tools", "kind": "tool", "where": "wug_inspect.py tools", "model_calls": 0, "parallel_ok": true},
-  {"id": "mcp.agentic_runs", "kind": "tool", "where": "wug_inspect.py runs", "model_calls": 0, "parallel_ok": true},
-  {"id": "mcp.agentic_report", "kind": "tool", "where": "wug_inspect.py report", "model_calls": 0, "parallel_ok": true},
-  {"id": "mcp.agentic_memory", "kind": "tool", "where": "wug_inspect.py memory", "model_calls": 0, "parallel_ok": true},
-  {"id": "mcp.agentic_repairs", "kind": "tool", "where": "wug_inspect.py repairs", "model_calls": 0, "parallel_ok": true},
-  {"id": "mcp.gh_repos", "kind": "tool", "where": "wug_github.py repos", "model_calls": 0, "parallel_ok": true},
-  {"id": "mcp.gh_tree", "kind": "tool", "where": "wug_github.py tree", "model_calls": 0, "parallel_ok": true},
-  {"id": "mcp.gh_read", "kind": "tool", "where": "wug_github.py read", "model_calls": 0, "parallel_ok": true},
-  {"id": "mcp.gh_commits", "kind": "tool", "where": "wug_github.py commits", "model_calls": 0, "parallel_ok": true},
-  {"id": "mcp.gh_search", "kind": "tool", "where": "wug_github.py search", "model_calls": 0, "parallel_ok": true},
-
-  {"id": "hook.flag_gate", "kind": "tool", "where": "hooks/flag_gate.py (Gemini CLI AfterAgent)", "model_calls": 0, "parallel_ok": true, "note": "a deny makes the CLI take one more model turn (retry); the hook itself calls no model"},
-  {"id": "cli.turn", "kind": "model", "where": "Gemini CLI itself (interactive or ga gemini)", "model_calls": "1+ per user turn", "parallel_ok": false, "note": "not ours; listed so the scheduler sees the whole session"},
-
-  {"id": "bench.cli_a", "kind": "model", "where": "wug_bench.py run_cli (condition a)", "model_calls": "1+", "parallel_ok": false},
-  {"id": "bench.cli_b", "kind": "model", "where": "wug_bench.py run_cli (condition b)", "model_calls": "1+", "parallel_ok": false},
-  {"id": "bench.api_c", "kind": "model", "where": "wug_bench.py run_api (condition c)", "model_calls": 1, "parallel_ok": true},
-  {"id": "bench.measure", "kind": "tool", "where": "wug_bench.py measure / summarize / blind", "model_calls": 0, "parallel_ok": true}
+  {
+   "id": "mcp.agentic_run",
+   "kind": "model",
+   "where": "wug_mcp.py -> wug.py run -> se_new agentic.run.run",
+   "model_calls": "0..budgets.model_calls (4)",
+   "parallel_ok": false,
+   "note": "composite: the agentic.* steps below; 0 model calls when the controller finishes with a registered tool"
+  },
+  {
+   "id": "agentic.run_start",
+   "kind": "tool",
+   "where": "se_new agentic/run.py run (RUN_START)",
+   "model_calls": 0,
+   "parallel_ok": true
+  },
+  {
+   "id": "agentic.controller_route",
+   "kind": "tool",
+   "where": "se_new agentic/controller.py try_tools -> walp.se_router.route",
+   "model_calls": 0,
+   "parallel_ok": true,
+   "note": "LLM-free routing"
+  },
+  {
+   "id": "agentic.controller_precheck",
+   "kind": "tool",
+   "where": "se_new agentic/controller.py precheck",
+   "model_calls": 0,
+   "parallel_ok": true
+  },
+  {
+   "id": "agentic.tool_exec",
+   "kind": "tool",
+   "where": "se_new agentic/tools.py sandbox_execute (HEAD worktree)",
+   "model_calls": 0,
+   "parallel_ok": true,
+   "note": "one registered tool; 12 registered"
+  },
+  {
+   "id": "agentic.gate01",
+   "kind": "tool",
+   "where": "se_new agentic/sequencer.py chain_in / gate01.py",
+   "model_calls": 0,
+   "parallel_ok": false
+  },
+  {
+   "id": "agentic.memory_recall",
+   "kind": "tool",
+   "where": "se_new agentic/memory.py recall",
+   "model_calls": 0,
+   "parallel_ok": true
+  },
+  {
+   "id": "agentic.thinker_turn",
+   "kind": "model",
+   "where": "se_new agentic/thinker.py think -> FixedModel.turn",
+   "model_calls": 1,
+   "parallel_ok": false,
+   "note": "ReAct turn; at most budgets.react_turns (6) per run"
+  },
+  {
+   "id": "agentic.thinker_tool_call",
+   "kind": "tool",
+   "where": "se_new agentic/thinker.py think -> sandbox_execute",
+   "model_calls": 0,
+   "parallel_ok": true,
+   "note": "function calls returned by one thinker turn"
+  },
+  {
+   "id": "agentic.forgery_scan",
+   "kind": "tool",
+   "where": "se_new agentic/forgery.py scan",
+   "model_calls": 0,
+   "parallel_ok": true
+  },
+  {
+   "id": "agentic.loop_eval",
+   "kind": "tool",
+   "where": "se_new agentic/loop.py",
+   "model_calls": 0,
+   "parallel_ok": true
+  },
+  {
+   "id": "agentic.memory_record",
+   "kind": "tool",
+   "where": "se_new agentic/memory.py record",
+   "model_calls": 0,
+   "parallel_ok": false
+  },
+  {
+   "id": "agentic.render",
+   "kind": "tool",
+   "where": "se_new agentic/render.py render",
+   "model_calls": 0,
+   "parallel_ok": true
+  },
+  {
+   "id": "mcp.essay_write",
+   "kind": "model",
+   "where": "wug_mcp.py -> wug.py essay -> wug_essay.run",
+   "model_calls": "photos + 1 + n + (0|1)",
+   "parallel_ok": false,
+   "note": "composite: the essay.* steps below"
+  },
+  {
+   "id": "essay.facts",
+   "kind": "model",
+   "where": "wug_essay.py step_facts",
+   "model_calls": 1,
+   "parallel_ok": true,
+   "note": "one per photo without human facts; 0 when spec.facts is given"
+  },
+  {
+   "id": "essay.roles",
+   "kind": "tool",
+   "where": "wug_essay.py assign_roles",
+   "model_calls": 0,
+   "parallel_ok": true
+  },
+  {
+   "id": "essay.thesis",
+   "kind": "model",
+   "where": "wug_essay.py step_thesis",
+   "model_calls": 1,
+   "parallel_ok": false
+  },
+  {
+   "id": "essay.points_clean",
+   "kind": "tool",
+   "where": "wug_essay.py clean_points",
+   "model_calls": 0,
+   "parallel_ok": true
+  },
+  {
+   "id": "essay.draft",
+   "kind": "model",
+   "where": "wug_essay.py step_drafts",
+   "model_calls": 1,
+   "parallel_ok": true,
+   "note": "n per run (default 4); independent of each other"
+  },
+  {
+   "id": "essay.gate",
+   "kind": "tool",
+   "where": "wug_essay.py gate",
+   "model_calls": 0,
+   "parallel_ok": true
+  },
+  {
+   "id": "essay.select",
+   "kind": "tool",
+   "where": "wug_essay.py run (rank_key)",
+   "model_calls": 0,
+   "parallel_ok": false
+  },
+  {
+   "id": "essay.revise",
+   "kind": "model",
+   "where": "wug_essay.py step_revise",
+   "model_calls": 1,
+   "parallel_ok": false,
+   "note": "0 when the chosen draft has no violation"
+  },
+  {
+   "id": "essay.report",
+   "kind": "tool",
+   "where": "wug_essay.py report",
+   "model_calls": 0,
+   "parallel_ok": false
+  },
+  {
+   "id": "mcp.media_ask",
+   "kind": "model",
+   "where": "wug_mcp.py -> wug_media.ask",
+   "model_calls": 1,
+   "parallel_ok": true
+  },
+  {
+   "id": "mcp.image_generate",
+   "kind": "model",
+   "where": "wug_mcp.py -> wug_media.generate",
+   "model_calls": 1,
+   "parallel_ok": true
+  },
+  {
+   "id": "image.save",
+   "kind": "tool",
+   "where": "wug_media.py _save",
+   "model_calls": 0,
+   "parallel_ok": true
+  },
+  {
+   "id": "mcp.media_info",
+   "kind": "tool",
+   "where": "wug_media.py info",
+   "model_calls": 0,
+   "parallel_ok": true
+  },
+  {
+   "id": "mcp.media_convert",
+   "kind": "tool",
+   "where": "wug_media.py convert",
+   "model_calls": 0,
+   "parallel_ok": true
+  },
+  {
+   "id": "mcp.agentic_setup",
+   "kind": "tool",
+   "where": "wug.py setup",
+   "model_calls": 0,
+   "parallel_ok": false
+  },
+  {
+   "id": "mcp.agentic_doctor",
+   "kind": "tool",
+   "where": "wug.py doctor",
+   "model_calls": 0,
+   "parallel_ok": false,
+   "note": "its checks never call the model"
+  },
+  {
+   "id": "mcp.agentic_versions",
+   "kind": "tool",
+   "where": "wug.py versions",
+   "model_calls": 0,
+   "parallel_ok": true
+  },
+  {
+   "id": "mcp.agentic_tools",
+   "kind": "tool",
+   "where": "wug_inspect.py tools",
+   "model_calls": 0,
+   "parallel_ok": true
+  },
+  {
+   "id": "mcp.agentic_runs",
+   "kind": "tool",
+   "where": "wug_inspect.py runs",
+   "model_calls": 0,
+   "parallel_ok": true
+  },
+  {
+   "id": "mcp.agentic_report",
+   "kind": "tool",
+   "where": "wug_inspect.py report",
+   "model_calls": 0,
+   "parallel_ok": true
+  },
+  {
+   "id": "mcp.agentic_memory",
+   "kind": "tool",
+   "where": "wug_inspect.py memory",
+   "model_calls": 0,
+   "parallel_ok": true
+  },
+  {
+   "id": "mcp.agentic_repairs",
+   "kind": "tool",
+   "where": "wug_inspect.py repairs",
+   "model_calls": 0,
+   "parallel_ok": true
+  },
+  {
+   "id": "mcp.result_read",
+   "kind": "tool",
+   "where": "wug_mcp.py read_result",
+   "model_calls": 0,
+   "parallel_ok": true,
+   "note": "pages of a capped tool result (S3)"
+  },
+  {
+   "id": "mcp.gh_repos",
+   "kind": "tool",
+   "where": "wug_github.py repos",
+   "model_calls": 0,
+   "parallel_ok": true
+  },
+  {
+   "id": "mcp.gh_tree",
+   "kind": "tool",
+   "where": "wug_github.py tree",
+   "model_calls": 0,
+   "parallel_ok": true
+  },
+  {
+   "id": "mcp.gh_read",
+   "kind": "tool",
+   "where": "wug_github.py read",
+   "model_calls": 0,
+   "parallel_ok": true
+  },
+  {
+   "id": "mcp.gh_commits",
+   "kind": "tool",
+   "where": "wug_github.py commits",
+   "model_calls": 0,
+   "parallel_ok": true
+  },
+  {
+   "id": "mcp.gh_search",
+   "kind": "tool",
+   "where": "wug_github.py search",
+   "model_calls": 0,
+   "parallel_ok": true
+  },
+  {
+   "id": "mcp.result_cap",
+   "kind": "tool",
+   "where": "wug_mcp.py cap_result",
+   "model_calls": 0,
+   "parallel_ok": true,
+   "note": "every tool result > 4000 chars -> head + result_id; full text on disk (S3)"
+  },
+  {
+   "id": "hook.flag_gate",
+   "kind": "tool",
+   "where": "hooks/flag_gate.py (Gemini CLI AfterAgent)",
+   "model_calls": 0,
+   "parallel_ok": true,
+   "note": "a deny makes the CLI take one more model turn (retry); the hook itself calls no model"
+  },
+  {
+   "id": "cli.turn",
+   "kind": "model",
+   "where": "Gemini CLI itself (interactive or ga gemini)",
+   "model_calls": "1+ per user turn",
+   "parallel_ok": false,
+   "note": "not ours; listed so the scheduler sees the whole session"
+  },
+  {
+   "id": "bench.cli_a",
+   "kind": "model",
+   "where": "wug_bench.py run_cli (condition a)",
+   "model_calls": "1+",
+   "parallel_ok": false
+  },
+  {
+   "id": "bench.cli_b",
+   "kind": "model",
+   "where": "wug_bench.py run_cli (condition b)",
+   "model_calls": "1+",
+   "parallel_ok": false
+  },
+  {
+   "id": "bench.api_c",
+   "kind": "model",
+   "where": "wug_bench.py run_api (condition c)",
+   "model_calls": 1,
+   "parallel_ok": true
+  },
+  {
+   "id": "bench.measure",
+   "kind": "tool",
+   "where": "wug_bench.py measure / summarize / blind",
+   "model_calls": 0,
+   "parallel_ok": true
+  }
  ]
 }

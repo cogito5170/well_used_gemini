@@ -157,11 +157,29 @@ class Run:
         body = {"contents": [{"role": "user", "parts": parts + [{"text": text}]}]}
         if gen:
             body["generationConfig"] = gen
-        resp = WM._post(MODEL, body, self.poster)
+        # 이어 하기(CMD-WUG1 S7): 같은 요청의 답이 저장돼 있으면 모델을 다시 부르지 않는다.
+        # 한도에 걸려 멈춘 뒤 같은 spec 으로 다시 부르면 끝난 단계는 건너뛰고 남은 단계만 한도를 쓴다.
+        import hashlib
+        key = hashlib.sha256(json.dumps([MODEL, step, body], ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:20]
+        cache = self.out / "cache" / f"{key}.json"
+        if cache.is_file():
+            c = json.loads(cache.read_text(encoding="utf-8"))
+            self.calls.append(c["reported"])
+            self.log("MODEL_CALL_REUSED", {"step": step, "reported": c["reported"], "chars": len(c["text"])})
+            return c["text"]
+        try:
+            resp = WM._post(MODEL, body, self.poster)
+        except WM.QuotaWait as q:
+            self.log("QUOTA_WAIT", {"step": step, "scope": q.scope, "seconds": q.seconds})
+            raise
         out = "\n".join(WM._texts(resp)).strip()
-        self.calls.append(resp.get("modelVersion") or "미보고")
-        self.log("MODEL_CALL", {"step": step, "asked": MODEL, "reported": resp.get("modelVersion") or "미보고",
-                                "chars": len(out)})
+        rep = resp.get("modelVersion") or "미보고"
+        self.calls.append(rep)
+        self.log("MODEL_CALL", {"step": step, "asked": MODEL, "reported": rep, "chars": len(out)})
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        tmp = cache.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"step": step, "reported": rep, "text": out}, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(cache)
         return out
 
 
@@ -323,15 +341,26 @@ def report(spec, facts, thesis, cands, roles, gates, best, fg, revised, calls, p
     return "\n".join(lines) + "\n"
 
 
+def spec_key(spec: dict) -> str:
+    """같은 요청이면 같은 자리 -- 그래야 한도 대기 뒤에 다시 불렀을 때 이어 한다. fresh 를 바꾸면 새 자리."""
+    import hashlib
+    keep = {k: spec.get(k) for k in ("prompt", "questions", "photos", "limit", "material", "n", "facts", "roles", "fresh")}
+    return hashlib.sha256(json.dumps(keep, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16]
+
+
 def main(argv) -> int:
     if not argv:
         print(__doc__)
         return 2
     spec = json.loads(Path(os.path.expanduser(argv[0])).read_text(encoding="utf-8"))
     spec["photos"] = [str(Path(os.path.expanduser(p)).resolve()) for p in spec.get("photos") or []]
-    out = Path(os.path.expanduser(spec.get("out") or f"~/well_used_gemini_essays/{time.strftime('%Y%m%d-%H%M%S')}"))
+    out = Path(os.path.expanduser(spec.get("out") or f"~/well_used_gemini_essays/{spec_key(spec)}"))
     try:
         r = run(spec, out)
+    except WM.QuotaWait as q:
+        # 실패가 아니다 -- 끝난 단계는 out/cache 에 있다. 같은 spec 으로 다시 부르면 이어서 한다
+        print(f"[essay] {q} · 저장 자리 {out}")
+        return 4
     except WM.MediaError as e:
         print(f"[essay] {WM._hide(str(e))}", file=sys.stderr)
         return 1
