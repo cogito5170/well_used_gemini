@@ -1,5 +1,5 @@
 {
  "url": "https://github.com/cogito5170/se_new",
- "commit": "eed677bd7bf538132bd8c9468e756115b2b7661f",
- "why": "cogito5170/se_new#11 머지 커밋 -- 고정 모델 gemini-3-flash-preview"
+ "commit": "02e87d590e0a1a38ca989df105b7abcb78c08c02",
+ "why": "cogito5170/se_new#12 머지 커밋 -- 모든 키가 429 면 quota_wait"
 }
