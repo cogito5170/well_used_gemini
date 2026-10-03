@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """글쓰기 품질 차이를 **원인별로 가르는** 실험. wug.py bench 가 가상환경 파이썬으로 부른다.
 
-같은 요청 · 같은 사진으로 네 조건을 N 번씩 돌린다:
+같은 요청 · 같은 사진으로 세 조건을 N 번씩 돌린다:
 
     a  Gemini CLI 그대로          (기본 지시문: "software engineering" · "Minimal Output: fewer than 3 lines")
     b  Gemini CLI + 글쓰기 모드    (GEMINI_SYSTEM_MD=writing/system.md)
-    c  API 직접 · 같은 작은 모델   (글쓰기 지시문 + 사진을 inline 으로 · CLI 의 도구 · GEMINI.md 없음)
-    d  API 직접 · 큰 모델          (c 와 같고 모델만 다르다)
+    c  API 직접                   (글쓰기 지시문 + 사진을 inline 으로 · CLI 의 도구 · GEMINI.md 없음)
 
-    a - b  = 지시문의 몫      b - c = CLI 배관(사진 붙이기 · 도구 · GEMINI.md)의 몫      c - d = 모델 크기의 몫
+    a - b  = 지시문의 몫      b - c = CLI 배관(사진 붙이기 · 도구 · GEMINI.md)의 몫
+    모델 크기 조건(d)은 뺐다(2026-10-03): 모델은 하나다(wug_model.MODEL · 폴백 없음).
 
-a · b 는 `-m` 으로 c 와 같은 모델을 쓴다. 그래야 차이가 모델에서 오지 않는다.
+a · b 는 `-m` 으로 c 와 같은 모델을 쓴다. 그래야 차이가 모델에서 오지 않는다(Gemini CLI 0.62.0 은 이 이름을 바꿔 치지 않는다 -- wug_model.py).
 
 ## 재는 것 -- 코드로 세는 것과 사람이 보는 것을 갈라 둔다
 
@@ -42,8 +42,9 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 SYSTEM_MD = HERE / "writing" / "system.md"
 API = os.environ.get("WUG_GEMINI_API", "https://generativelanguage.googleapis.com/v1beta")
-SMALL = "gemini-3.1-flash-lite"
-CONDS = {"a": "CLI 그대로", "b": "CLI + 글쓰기 모드", "c": "API · 작은 모델", "d": "API · 큰 모델"}
+sys.path.insert(0, str(HERE))
+from wug_model import MODEL  # noqa: E402  -- 하나, 폴백 없음. 세 조건이 다 이것을 쓴다
+CONDS = {"a": "CLI 그대로", "b": "CLI + 글쓰기 모드", "c": "API 직접"}
 MEMO = re.compile(r"(함|임|음|됨)\s*[.。]?\s*$")
 REVIEW = ("주의할 점", "출처 미확인", "확인하지 않았", "확인 안 한")
 DEFAULT_ABSTRACT = ["밀도", "호흡", "접점", "필터", "정교한", "완벽히", "즉각적", "스며드"]
@@ -157,26 +158,6 @@ def run_api(spec: dict, photos: list, model: str, poster=None, timeout: int = 30
             "error": None if text.strip() else "empty_response"}
 
 
-def pick_big(lister=None) -> str:
-    """WUG_BENCH_BIG > 목록에서 generateContent 를 받는 'pro' 모델(미리보기가 아닌 것 · 번호가 큰 것 먼저)."""
-    if os.environ.get("WUG_BENCH_BIG"):
-        return os.environ["WUG_BENCH_BIG"]
-    if lister:
-        models = lister()
-    else:
-        import requests
-        r = requests.get(f"{API}/models", params={"pageSize": 200}, headers={"x-goog-api-key": _key()}, timeout=30)
-        if r.status_code != 200:
-            raise SystemExit(f"[bench] 모델 목록 http_{r.status_code} -- --big 으로 직접 줘라")
-        models = r.json().get("models") or []
-    cands = [m["name"].split("/", 1)[-1] for m in models
-             if re.search(r"gemini-[\d.]+-pro", m.get("name", "")) and "image" not in m.get("name", "")
-             and "tts" not in m.get("name", "") and "generateContent" in (m.get("supportedGenerationMethods") or [])]
-    if not cands:
-        raise SystemExit("[bench] 목록에 pro 모델이 없다 -- --big 으로 직접 줘라")
-    return sorted(cands, key=lambda n: ("preview" not in n, [int(x) for x in re.findall(r"\d+", n)]), reverse=True)[0]
-
-
 # ---------------------------------------------------------------- 보고
 def summarize(rows: list) -> str:
     out = ["| 조건 | 돈 횟수 | 글자 | 사진 사실 | 메모체 비율 | 추상어 | 검토 있음 | 응답이 밝힌 모델 |",
@@ -202,7 +183,7 @@ def summarize(rows: list) -> str:
                    f"{span('memo_ratio')} | {span('abstract')} | {sum(r['m']['review'] for r in rs)}/{len(rs)} | "
                    f"{', '.join(models)} |")
     out.append("\n가운데 값(최소–최대). **대리 지표다** -- 글의 질은 blind.md 를 사람이 보고 정한다.")
-    out.append("가르는 법: a−b = 지시문 · b−c = CLI 배관(사진 붙이기 · 도구 · GEMINI.md) · c−d = 모델 크기.")
+    out.append("가르는 법: a−b = 지시문 · b−c = CLI 배관(사진 붙이기 · 도구 · GEMINI.md). 모델은 셋 다 같다.")
     errs = [r for r in rows if r.get("error")]
     if errs:
         out.append("\n실패한 실행:")
@@ -228,9 +209,7 @@ def main(argv) -> int:
     ap = argparse.ArgumentParser(description="글쓰기 품질 차이를 원인별로 가르는 실험")
     ap.add_argument("spec")
     ap.add_argument("--runs", type=int, default=None)
-    ap.add_argument("--only", default="abcd", help="돌릴 조건(예: ab)")
-    ap.add_argument("--small", default=None, help=f"a·b·c 의 모델(기본 {SMALL})")
-    ap.add_argument("--big", default=None, help="d 의 모델(기본: 목록에서 pro)")
+    ap.add_argument("--only", default="abc", help="돌릴 조건(예: ab)")
     ap.add_argument("--out", default=None)
     ap.add_argument("--measure", nargs="+", metavar="TXT", help="실험 없이 이 글 파일들만 잰다(지표가 가르는지 먼저 보기)")
     a = ap.parse_args(argv)
@@ -248,14 +227,10 @@ def main(argv) -> int:
         print(f"[bench] 사진이 없다: {missing}", file=sys.stderr)
         return 2
     runs = a.runs or int(spec.get("runs", 3))
-    small = a.small or spec.get("small") or SMALL
-    big = None
-    if "d" in a.only:
-        big = a.big or spec.get("big") or pick_big()
     out = Path(os.path.expanduser(a.out or spec.get("out") or
                                   f"~/well_used_gemini_bench/{time.strftime('%Y%m%d-%H%M%S')}"))
     (out / "raw").mkdir(parents=True, exist_ok=True)
-    print(f"[bench] 조건 {a.only} · 각 {runs}번 · 작은 모델 {small}" + (f" · 큰 모델 {big}" if big else "")
+    print(f"[bench] 조건 {a.only} · 각 {runs}번 · 모델 {MODEL}(세 조건 모두)"
           + f"\n[bench] 결과: {out}", flush=True)
     rows = []
     for i in range(runs):
@@ -263,9 +238,9 @@ def main(argv) -> int:
             if c not in CONDS:
                 continue
             if c in "ab":
-                r = run_cli(spec, photos, small, writing=(c == "b"))
+                r = run_cli(spec, photos, MODEL, writing=(c == "b"))
             else:
-                r = run_api(spec, photos, small if c == "c" else big)
+                r = run_api(spec, photos, MODEL)
             r.update({"cond": c, "run": i + 1})
             r.setdefault("models", [])
             if not r.get("error"):

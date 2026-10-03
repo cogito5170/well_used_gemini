@@ -39,16 +39,9 @@ ok(g["review"] and not b["review"], "자기 검토 표지")
 ok(B.measure("", facts, [])["memo_ratio"] is None, "문장이 없으면 비율은 None(0 이 아니다)")
 ok(B.measure("Long coat by the river.", facts, [])["photo_facts"] == 2, "영어 동의어도 센다(대소문자 무시)")
 
-print("[모델] 큰 모델은 목록에서 -- 미리보기가 아닌 pro 먼저")
-lst = [{"name": "models/gemini-9.0-pro-preview", "supportedGenerationMethods": ["generateContent"]},
-       {"name": "models/gemini-8.5-pro", "supportedGenerationMethods": ["generateContent"]},
-       {"name": "models/gemini-9.0-pro-image", "supportedGenerationMethods": ["generateContent"]},
-       {"name": "models/gemini-9.0-flash", "supportedGenerationMethods": ["generateContent"]}]
-os.environ.pop("WUG_BENCH_BIG", None)
-ok(B.pick_big(lambda: lst) == "gemini-8.5-pro", "pro · 미리보기 아님 · image 아님")
-os.environ["WUG_BENCH_BIG"] = "x-big"
-ok(B.pick_big(lambda: lst) == "x-big", "WUG_BENCH_BIG 이 이긴다")
-os.environ.pop("WUG_BENCH_BIG")
+print("[모델] 세 조건이 다 같은 모델 하나 -- 큰 모델 조건(d)은 없다")
+ok(B.MODEL == "gemini-3-flash-preview" and set(B.CONDS) == {"a", "b", "c"} and not hasattr(B, "pick_big"),
+   "조건 a·b·c · 모델 하나")
 
 seen = []
 
@@ -61,7 +54,7 @@ class Fake(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         seen.append((self.path, self.headers.get("x-goog-api-key"), body))
         model = self.path.split("/models/")[1].split(":")[0]
-        text = ("강가에 선 코트. 문장이다." if "big" in model else "공간과 나를 잇는 필터임.") + f" #{len(seen)}"
+        text = "강가에 선 코트. 문장이다." + f" #{len(seen)}"
         parts = [{"thought": True, "text": "THOUGHT-생각"}, {"text": text}]
         b = json.dumps({"modelVersion": model + "-001", "candidates": [{"content": {"parts": parts}}]}).encode()
         self.send_response(200)
@@ -83,7 +76,7 @@ open(log, "a").write(json.dumps(rec, ensure_ascii=False) + "\n")
 if "-p" not in a:
     sys.exit(0)
 text = ("강가의 올리브 파카 앞에서 멈춘다.\n\n## 주의할 점\n- 없음" if rec["sysmd"] else "패션은 필터임.") + " #" + str(sum(1 for _ in open(log)))
-print(json.dumps({"session_id": "s", "response": text, "stats": {"models": {"gemini-3.1-flash-lite-002": {}}}}))
+print(json.dumps({"session_id": "s", "response": text, "stats": {"models": {"gemini-3-flash-preview-002": {}}}}))
 '''
 
 with tempfile.TemporaryDirectory() as tmp:
@@ -100,8 +93,8 @@ with tempfile.TemporaryDirectory() as tmp:
            "GEMINI_API_KEY": key, "WUG_GEMINI_API": f"http://127.0.0.1:{srv.server_port}/v1beta",
            "NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1", "GEMINI_SYSTEM_MD": "/should/not/leak/into/a"}
 
-    print("[실험] 네 조건을 끝까지 -- 가짜 gemini 명령 · 가짜 API")
-    p = subprocess.run([sys.executable, str(ROOT / "wug_bench.py"), str(T / "spec.json"), "--big", "my-big",
+    print("[실험] 세 조건을 끝까지 -- 가짜 gemini 명령 · 가짜 API")
+    p = subprocess.run([sys.executable, str(ROOT / "wug_bench.py"), str(T / "spec.json"),
                         "--out", str(T / "out")], env=env, capture_output=True, text=True, timeout=120)
     ok(p.returncode == 0, f"끝값 0 ({p.stderr.strip()[-200:]})")
     calls = [json.loads(l) for l in (T / "log.jsonl").read_text().splitlines()]
@@ -111,40 +104,39 @@ with tempfile.TemporaryDirectory() as tmp:
     ok(len(a_calls) == 2 and len(b_calls) == 2, "a 에는 GEMINI_SYSTEM_MD 가 없다(부모 환경에 있어도 지운다) · b 에는 있다")
     ok(all(c["sysmd"] == str(ROOT / "writing" / "system.md") for c in b_calls), "b 의 지시문은 writing/system.md")
     c0 = calls[0]["argv"]
-    ok(c0[c0.index("-m") + 1] == "gemini-3.1-flash-lite" and "-o" in c0 and "--skip-trust" in c0,
+    ok(c0[c0.index("-m") + 1] == "gemini-3-flash-preview" and "-o" in c0 and "--skip-trust" in c0,
        "a·b 는 -m 작은 모델 · -o json · --skip-trust")
     ok("@photo1.jpg" in c0[c0.index("-p") + 1] and all("photo1.jpg" in c["files"] for c in calls),
        "사진을 빈 임시 폴더로 복사해 @photo1.jpg 로 붙인다")
     ok(all(c["cwd"] != str(ROOT) for c in calls), "CLI 는 이 저장소가 아니라 임시 폴더에서 돈다")
     api = [s for s in seen]
-    ok(len(api) == 4 and sum("flash-lite" in s[0] for s in api) == 2 and sum("my-big" in s[0] for s in api) == 2,
-       "API 는 c(작은 모델)·d(큰 모델) 2번씩")
+    ok(len(api) == 2 and all("/models/gemini-3-flash-preview:" in s[0] for s in api), "API 는 c 만, 같은 모델로 2번")
     body = api[0][2]
     st = body["system_instruction"]["parts"][0]["text"]
     ok("writing partner" in st and "${AvailableTools}" not in st, "c·d 도 같은 글쓰기 지시문(도구 칸은 채웠다)")
     ok(body["contents"][0]["parts"][0]["inline_data"]["mime_type"] == "image/jpeg" and api[0][1] == key,
        "사진은 inline · 키는 머리로")
     rep = (T / "out" / "report.md").read_text()
-    ok("| a CLI 그대로 | 2/2 |" in rep and "| d API · 큰 모델 | 2/2 |" in rep, "보고서 표에 네 조건")
-    ok("gemini-3.1-flash-lite-002" in rep and "my-big-001" in rep, "모델 칸은 응답이 밝힌 이름")
+    ok("| a CLI 그대로 | 2/2 |" in rep and "| c API 직접 | 2/2 |" in rep and "| d " not in rep, "보고서 표에 세 조건")
+    ok("gemini-3-flash-preview-002" in rep and "gemini-3-flash-preview-001" in rep, "모델 칸은 응답이 밝힌 이름")
     ok("2 (2–2) / 2" in rep.split("| b ")[1].split("\n")[0] and "0 (0–0) / 2" in rep.split("| a ")[1].split("\n")[0],
        "사진 사실: b 2/2 · a 0/2 (가짜가 준 글 그대로 셌다)")
     key_map = json.loads((T / "out" / "key.json").read_text())
     blind_md = (T / "out" / "blind.md").read_text()
-    ok(len(key_map) == 8 and all(f"## {t}" in blind_md for t in key_map), "블라인드 8벌 · 열쇠가 다 맞는다")
-    ok("CLI" not in blind_md and "flash" not in blind_md and "my-big" not in blind_md, "blind.md 에 출처가 안 새어 나온다")
+    ok(len(key_map) == 6 and all(f"## {t}" in blind_md for t in key_map), "블라인드 6벌 · 열쇠가 다 맞는다")
+    ok("CLI" not in blind_md and "flash" not in blind_md, "blind.md 에 출처가 안 새어 나온다")
     raw = {f.name for f in (T / "out" / "raw").iterdir()}
     ok(not any("THOUGHT" in (T / "out" / "raw" / n).read_text() for n in raw), "모델의 생각(thought) 부분은 글에 안 넣는다")
-    ok(len({(T / "out" / "raw" / n).read_text() for n in raw}) == 8, "가짜가 매번 다른 글을 준다(열쇠 검사가 뜻을 갖게)")
+    ok(len({(T / "out" / "raw" / n).read_text() for n in raw}) == 6, "가짜가 매번 다른 글을 준다(열쇠 검사가 뜻을 갖게)")
     for tag, k in key_map.items():
         txt = blind_md.split(f"## {tag}\n\n")[1].split("\n\n---")[0].strip()
         if txt != (T / "out" / "raw" / f"{k['cond']}-{k['run']}.md").read_text().strip():
             ok(False, f"열쇠 {tag} 가 다른 글을 가리킨다")
             break
     else:
-        ok(len(raw) == 8, "열쇠가 가리키는 글이 그 조건의 원문과 같다(8벌 전부)")
+        ok(len(raw) == 6, "열쇠가 가리키는 글이 그 조건의 원문과 같다(6벌 전부)")
 
-    rows = [{"cond": c, "run": i, "models": [], "text": f"{c}{i}"} for c in "abcd" for i in (1, 2)]
+    rows = [{"cond": c, "run": i, "models": [], "text": f"{c}{i}"} for c in "abc" for i in (1, 2, 3)]
     order = []
     for seed in range(5):
         d = T / f"blind{seed}"
@@ -185,4 +177,4 @@ print()
 if fails:
     print(f"bench: {len(fails)}개 실패 -- {fails}")
     sys.exit(1)
-print("bench: 대리 지표 · 네 조건 · 응답이 밝힌 모델 · 블라인드 열쇠 · 실패 기록 · 글쓰기 모드 -- 통과")
+print("bench: 대리 지표 · 세 조건 · 응답이 밝힌 모델 · 블라인드 열쇠 · 실패 기록 · 글쓰기 모드 -- 통과")

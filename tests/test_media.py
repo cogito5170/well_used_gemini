@@ -62,7 +62,7 @@ class Fake(BaseHTTPRequestHandler):
     def do_GET(self):
         seen.append(("GET", self.path, self.headers.get("x-goog-api-key")))
         self._send(200, {"models": [
-            {"name": "models/gemini-3.1-flash-lite", "supportedGenerationMethods": ["generateContent"]},
+            {"name": "models/gemini-3-flash-preview", "supportedGenerationMethods": ["generateContent"]},
             {"name": "models/gemini-9.0-flash-image-preview", "supportedGenerationMethods": ["generateContent"]},
             {"name": "models/gemini-9.0-flash-image", "supportedGenerationMethods": ["generateContent"]},
             {"name": "models/imagen-9.0", "supportedGenerationMethods": ["predict"]}]})
@@ -72,11 +72,11 @@ class Fake(BaseHTTPRequestHandler):
         seen.append(("POST", self.path, self.headers.get("x-goog-api-key"), body))
         if "broken" in json.dumps(body):
             return self._send(400, {"error": {"message": f"bad key {KEY} rejected"}})
-        if "image" in self.path:
+        if "IMAGE" in json.dumps(body.get("generationConfig") or {}):
             if "refuse" in json.dumps(body):
                 return self._send(200, {"candidates": [{"finishReason": "IMAGE_SAFETY",
                                                         "content": {"parts": [{"text": "못 그린다"}]}}]})
-            return self._send(200, {"modelVersion": "gemini-9.0-flash-image", "candidates": [{"content": {"parts": [
+            return self._send(200, {"modelVersion": "gemini-3-flash-preview", "candidates": [{"content": {"parts": [
                 {"text": "그렸다"},
                 {"inlineData": {"mimeType": "image/png", "data": base64.b64encode(png_bytes()).decode()}}]}}]})
         n = len([p for p in body["contents"][0]["parts"] if "inline_data" in p])
@@ -130,26 +130,24 @@ with tempfile.TemporaryDirectory() as tmp:
     ok("파일 2개를 봤다" in out and post[2] == KEY, "inline_data 두 개 · 키는 x-goog-api-key 머리로")
     mimes = [p["inline_data"]["mime_type"] for p in post[3]["contents"][0]["parts"] if "inline_data" in p]
     ok(mimes == ["image/jpeg", "application/pdf"], f"mime 은 바이트로 정한 것 ({mimes})")
-    ok("gemini-3.1-flash-lite" in post[1] and "미보고" in out, "묻기는 설정 모델 · 응답이 모델을 안 밝히면 '미보고'")
+    ok("/models/gemini-3-flash-preview:" in post[1] and "미보고" in out, "묻기는 설정 모델 · 응답이 모델을 안 밝히면 '미보고'")
     ok(KEY not in out and "key=" not in post[1], "키가 주소 · 출력에 없다")
 
-    print("[내보내기] 그림 생성 -- 모델 이름은 목록에서, 쓴 모델은 응답이 밝힌 것으로")
+    print("[내보내기] 그림 생성 -- 모델은 하나(목록을 안 본다), 쓴 모델은 응답이 밝힌 것으로")
     out = M.generate("빨간 사각형", [str(T / "b.png")], ["jpg", "pdf", "png"], "4:5", "red")
     gen = seen[-1]
-    ok("gemini-9.0-flash-image:generateContent" in gen[1], f"미리보기가 아닌 image 모델을 골랐다 ({gen[1]})")
+    ok("/models/gemini-3-flash-preview:generateContent" in gen[1], f"그림도 같은 모델 하나 ({gen[1]})")
+    ok(not any(x[0] == "GET" for x in seen), "모델 목록을 읽지 않는다(다른 모델을 고를 길이 없다)")
     ok(gen[3]["generationConfig"]["responseModalities"] == ["TEXT", "IMAGE"]
        and gen[3]["generationConfig"]["imageConfig"] == {"aspectRatio": "4:5"}, "응답 꼴 · 비율")
     ok(any("inline_data" in p for p in gen[3]["contents"][0]["parts"]), "참고 사진이 같이 간다")
     files = {p.suffix: p for p in (T / "out").glob("red.*")}
     ok(set(files) == {".jpg", ".pdf", ".png"} and files[".jpg"].read_bytes()[:3] == b"\xff\xd8\xff"
        and files[".pdf"].read_bytes()[:4] == b"%PDF", "jpg · pdf · png 세 파일(바이트로 확인)")
-    ok("응답이 밝힌 모델 gemini-9.0-flash-image" in out and "그렸다" in out, "보고에 응답이 밝힌 모델 · 모델의 말")
+    ok("응답이 밝힌 모델 gemini-3-flash-preview" in out and "그렸다" in out, "보고에 응답이 밝힌 모델 · 모델의 말")
     os.environ["WUG_IMAGE_MODEL"] = "my-image-model"
-    try:
-        M.generate("x", formats=["png"])
-    except M.MediaError:
-        pass
-    ok("my-image-model:generateContent" in seen[-1][1], "WUG_IMAGE_MODEL 이 목록보다 이긴다")
+    M.generate("x", formats=["png"])
+    ok("/models/gemini-3-flash-preview:" in seen[-1][1], "WUG_IMAGE_MODEL 같은 환경 변수로도 모델이 안 바뀐다")
     os.environ.pop("WUG_IMAGE_MODEL")
     for bad, want in ((lambda: M.generate("refuse image"), "no_image_returned"),
                       (lambda: M.generate("broken"), "http_400"),

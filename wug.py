@@ -11,7 +11,7 @@ sandbox 실행 · MCP · RAG). 여기는 그것을 **고정된 커밋으로** �
     python3 wug.py key [gemini|github]  키를 한 번 저장한다(WUG_HOME/keys.env · 권한 600 · 재설치해도 남는다)
     python3 wug.py media info|ask|generate|convert '<JSON>'   사진·PDF 받기/내보내기(wug_media.py)
     python3 wug.py model [이름]          Gemini CLI 의 기본 모델(~/.gemini/settings.json 의 model.name). 이름을 주면
-                                      API 로 실제 있는지 확인한 뒤에만 쓴다(기본 gemini-3.1-flash-lite)
+                                      API 로 실제 있는지 확인한 뒤에만 쓴다(기본 wug_model.MODEL) · 폴백 없는 사슬도 같이 쓴다
     python3 wug.py essay spec.json        글쓰기 파이프라인(사진 사실 · 논지 · 문항 역할 · 초안 N벌 · 코드 관문 · 한 번 고침)
     python3 wug.py write [gemini 인자...]  Gemini CLI 를 글쓰기 모드로(writing/system.md 가 기본 지시문을 바꾼다)
     python3 wug.py bench spec.json [--runs 3] [--only abcd]   글쓰기 품질 차이를 원인별로 가르는 실험
@@ -28,12 +28,16 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import time
 import venv
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from wug_model import MODEL as DEFAULT_CLI_MODEL, NO_FALLBACK_CHAINS, CLI_VERSION  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 LOCK = HERE / "se_new.lock"
@@ -321,18 +325,54 @@ def doctor() -> int:
     py = str(venv_python())
     results = [
         _check("requests 가 가상환경에 있다", [py, "-c", "import requests"]),
-        _check("설정이 정책 A 를 지킨다(agentic.config)", [py, "-c", "import agentic.config as c; print(c.load().model)"],
-               "gemini-"),
+        _check(f"설정이 정책 A 를 지키고 모델이 {DEFAULT_CLI_MODEL} 하나다(agentic.config)",
+               [py, "-c", "import agentic.config as c; print(c.load().model)"], DEFAULT_CLI_MODEL),
         _check("MCP 서버와 붙는다(버전 셋)", [py, "-m", "agentic.mcp_client", "--versions", "walp"], '"protocol"'),
         _check("모델 없이 도는 길: 제어부 + sandbox 실행 (처음에는 sandbox 의존성을 까느라 몇 분 걸린다)",
                [py, "-m", "agentic.run", "agentic/config.json 파일 읽어줘"],
                "DONE (controller_tool)"),
     ]
     n = sum(results)
+    cli_check()
     print(f"[wug] 점검 {n}/{len(results)} 통과" + ("" if n == len(results) else " -- 실패한 줄을 먼저 본다"))
     if n == len(results) and has_key(env):
         print('[wug] 다음: python3 wug.py run "안녕"')
     return 0 if n == len(results) else 1
+
+
+def gemini_cli_version() -> "str | None":
+    gem = shutil.which("gemini")
+    if not gem:
+        return None
+    try:
+        p = subprocess.run([gem, "--version"], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    m = re.search(r"\d+\.\d+\.\d+", p.stdout or "")
+    return m.group(0) if m else None
+
+
+def cli_check() -> bool:
+    """Gemini CLI 버전(사용자 결정: CLI_VERSION) · settings.json 의 모델과 폴백 사슬. 점검 수에는 안 센다(CLI 없이도 확장은 돈다)."""
+    v = gemini_cli_version()
+    ok_v = v == CLI_VERSION
+    print(f"  {'통과' if ok_v else '실패'}  Gemini CLI {v or '(못 찾음)'} -- 정한 판 {CLI_VERSION}"
+          + ("" if ok_v else f"  (npm install -g @google/gemini-cli@{CLI_VERSION})"))
+    try:
+        cur = json.loads(gemini_settings_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        cur = {}
+    name = (cur.get("model") or {}).get("name") if isinstance(cur.get("model"), dict) else None
+    chains = ((cur.get("modelConfigs") or {}).get("modelChains") or {}) if isinstance(cur.get("modelConfigs"), dict) else {}
+    pinned = (cur.get("experimental") or {}).get("dynamicModelConfiguration") is True and all(
+        chains.get(k) == [{"model": DEFAULT_CLI_MODEL, "isLastResort": True}] for k in NO_FALLBACK_CHAINS)
+    ok_m = name == DEFAULT_CLI_MODEL and pinned
+    print(f"  {'통과' if ok_m else '실패'}  CLI 기본 모델 {name or '(없음 -> auto)'} · 폴백 사슬 {'하나로 묶임' if pinned else '안 묶임'}"
+          + ("" if ok_m else f"  (python3 wug.py model {DEFAULT_CLI_MODEL})"))
+    if os.environ.get("GEMINI_MODEL") and os.environ["GEMINI_MODEL"] != DEFAULT_CLI_MODEL:
+        print(f"  실패  환경 변수 GEMINI_MODEL={os.environ['GEMINI_MODEL']} 가 settings.json 보다 이긴다")
+        ok_m = False
+    return ok_v and ok_m
 
 
 def versions() -> int:
@@ -375,7 +415,6 @@ def media(rest: list) -> int:
 
 
 GEMINI_API = os.environ.get("WUG_GEMINI_API", "https://generativelanguage.googleapis.com/v1beta")
-DEFAULT_CLI_MODEL = "gemini-3.1-flash-lite"   # Gemini CLI 0.46.0 models.js: DEFAULT_GEMINI_FLASH_LITE_MODEL ('now GA')
 
 
 def gemini_settings_path() -> Path:
@@ -437,8 +476,15 @@ def model_cmd(rest: list) -> int:
         print(f"[wug] 옛 설정을 남겼다: {bak}")
     m = cur.get("model") if isinstance(cur.get("model"), dict) else {}
     cur["model"] = {**m, "name": name}
+    # 폴백 없음: Gemini CLI 0.62.0 은 Gemini 3 모델이 막히면 같은 집안의 다른 모델(3.1-pro-preview)을 내민다.
+    # 사슬을 이 모델 하나로 묶는다(experimental.dynamicModelConfiguration 이 켜져야 modelChains 를 읽는다)
+    chains = {k: [{"model": name, "isLastResort": True}] for k in NO_FALLBACK_CHAINS}
+    mc = cur.get("modelConfigs") if isinstance(cur.get("modelConfigs"), dict) else {}
+    cur["modelConfigs"] = {**mc, "modelChains": {**(mc.get("modelChains") or {}), **chains}}
+    ex = cur.get("experimental") if isinstance(cur.get("experimental"), dict) else {}
+    cur["experimental"] = {**ex, "dynamicModelConfiguration": True}
     sp.write_text(json.dumps(cur, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(f"[wug] {sp} 의 model.name = {name} -- Gemini CLI 를 다시 띄우면 기본 모델이다")
+    print(f"[wug] {sp} 의 model.name = {name} · 폴백 사슬 = [{name}] 하나 -- Gemini CLI 를 다시 띄우면 적용된다")
     if os.environ.get("GEMINI_MODEL"):
         print(f"[wug] 주의: 환경 변수 GEMINI_MODEL={os.environ['GEMINI_MODEL']} 가 이것보다 이긴다")
     return 0

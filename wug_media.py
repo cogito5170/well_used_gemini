@@ -11,8 +11,8 @@
 규칙:
   · **결과는 파일이다.** 터미널은 그림을 못 보인다. 저장한 경로를 돌려주고, macOS 면 미리보기로 연다(WUG_OPEN=0 이면 안 연다)
   · 저장 자리: WUG_OUT, 없으면 ~/Pictures/well_used_gemini (없으면 ~/well_used_gemini_out). 남의 파일을 덮어쓰지 않는다
-  · **이미지 모델 이름을 기억으로 적지 않는다.** WUG_IMAGE_MODEL 이 없으면 API 의 모델 목록에서 고른다.
-    쓴 모델은 **응답이 밝힌 것**(modelVersion)으로 적는다. 밝히지 않으면 '미보고'
+  · **모델은 wug_model.MODEL 하나**(묻기 · 그림 둘 다). 목록에서 다른 모델을 고르지 않는다 -- 폴백 없음.
+    그 모델이 그림을 못 내면 no_image_returned 로 그대로 실패한다. 쓴 모델은 **응답이 밝힌 것**(modelVersion)으로 적는다
   · 키는 GEMINI_API_KEY(wug.child_env 가 keys.env · ~/.gemini/.env 에서 찾는다). 화면 · 오류에 안 싣는다
 """
 from __future__ import annotations
@@ -28,7 +28,7 @@ import time
 from pathlib import Path
 
 API = os.environ.get("WUG_GEMINI_API", "https://generativelanguage.googleapis.com/v1beta")
-ASK_MODEL_DEFAULT = "gemini-3.1-flash-lite"      # se_new agentic/config.json 의 고정 모델과 같다
+from wug_model import MODEL  # noqa: E402  -- 하나, 폴백 없음
 INLINE_CAP = 18 * 1024 * 1024                    # 요청 하나에 실을 원본 바이트 상한(인라인 요청 20MB 아래로)
 FORMATS = {"jpg": "JPEG", "jpeg": "JPEG", "png": "PNG", "webp": "WEBP", "pdf": "PDF"}
 MIME = {"jpg": "image/jpeg", "png": "image/png", "webp": "image/webp", "gif": "image/gif", "pdf": "application/pdf",
@@ -190,7 +190,7 @@ def ask(paths: list, question: str, poster=None) -> str:
         raise MediaError("paths_required")
     if not (question or "").strip():
         question = "Describe this file in detail."
-    model = os.environ.get("WUG_ASK_MODEL") or ASK_MODEL_DEFAULT
+    model = MODEL
     resp = _post(model, {"contents": [{"role": "user", "parts": _parts_for(paths) + [{"text": question}]}]}, poster)
     text = "\n".join(_texts(resp)).strip()
     fb = (resp.get("promptFeedback") or {}).get("blockReason")
@@ -199,33 +199,8 @@ def ask(paths: list, question: str, poster=None) -> str:
 
 # ---------------------------------------------------------------- 내보내기
 def pick_image_model(lister=None) -> str:
-    """WUG_IMAGE_MODEL > API 목록에서 generateContent 를 받는 'image' 모델(미리보기가 아닌 것 · 이름이 큰 것 먼저)."""
-    if os.environ.get("WUG_IMAGE_MODEL"):
-        return os.environ["WUG_IMAGE_MODEL"]
-    if lister:
-        models = lister()
-    else:
-        import requests
-        models, token = [], ""
-        for _ in range(10):
-            r = requests.get(f"{API}/models", params={"pageSize": 200, **({"pageToken": token} if token else {})},
-                             headers={"x-goog-api-key": _key()}, timeout=30)
-            if r.status_code != 200:
-                raise MediaError(_hide(f"model_list_http_{r.status_code} -- WUG_IMAGE_MODEL 로 이름을 직접 줄 수 있다"))
-            d = r.json()
-            models += d.get("models") or []
-            token = d.get("nextPageToken") or ""
-            if not token:
-                break
-    cands = [m["name"].split("/", 1)[-1] for m in models
-             if "image" in m.get("name", "") and "generateContent" in (m.get("supportedGenerationMethods") or [])]
-    if not cands:
-        raise MediaError("no_image_model -- 이 키로 쓸 수 있는 이미지 생성 모델이 목록에 없다(WUG_IMAGE_MODEL 로 직접 줄 수 있다)")
-
-    def rank(n):
-        nums = [int(x) for x in re.findall(r"\d+", n)]
-        return ("preview" not in n, "flash" in n, nums)
-    return sorted(cands, key=rank, reverse=True)[0]
+    """모델은 하나다(wug_model.MODEL). 목록을 보고 다른 것을 고르지 않는다 -- 폴백 없음."""
+    return MODEL
 
 
 def _save(img_bytes: bytes, stem: str, formats: list) -> list:

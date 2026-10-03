@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""글쓰기 파이프라인 -- 작은 모델(flash-lite) 바깥에 **비계**를 친다. 판정은 코드가 한다.
+"""글쓰기 파이프라인 -- 모델 하나(wug_model.MODEL) 바깥에 **비계**를 친다. 판정은 코드가 한다.
 
     사진 ─> ① 사실 뽑기(보이는 것만, JSON) ─┐
     문항 ─> ② 역할 나누기(코드: 정의 · 내 이유 · 기준) ─┤
@@ -13,7 +13,7 @@
 
     python3 wug.py essay spec.json             (spec: prompt · questions · photos · [limit] · [material] · [n])
 
-모델은 하나(WUG_ESSAY_MODEL, 기본 gemini-3.1-flash-lite). 부를 때마다 응답이 밝힌 모델을 원장에 적는다.
+모델은 하나(wug_model.MODEL · 폴백 없음 · 환경 변수로 안 바뀐다). 부를 때마다 응답이 밝힌 모델을 원장에 적는다.
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import wug_media as WM  # noqa: E402
 
-MODEL = os.environ.get("WUG_ESSAY_MODEL") or "gemini-3.1-flash-lite"
+from wug_model import MODEL  # noqa: E402
 MEMO = re.compile(r"(함|임|음|됨)\s*[.。]?\s*$")
 ABSTRACT = ["밀도", "호흡", "접점", "필터", "정교한", "완벽히", "즉각적", "스며드", "본질", "비로소", "결합"]
 FIRST_PERSON = re.compile(r"(^|[\s\"'(])(나는|내가|나의|나에게|나를|저는|제가|저의|저에게)")

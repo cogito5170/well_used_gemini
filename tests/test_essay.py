@@ -94,7 +94,7 @@ def poster(url, body):
         n = sum(1 for c in calls if c["step"].startswith("draft")) + 1
         step, out = f"draft{n}", DRAFTS[f"draft{n}"]
     calls.append({"step": step, "url": url, "imgs": imgs, "text": text, "gen": body.get("generationConfig")})
-    return {"modelVersion": "gemini-3.1-flash-lite-001", "candidates": [{"content": {"parts": [{"text": out}]}}]}
+    return {"modelVersion": "gemini-3-flash-preview-001", "candidates": [{"content": {"parts": [{"text": out}]}}]}
 
 
 with tempfile.TemporaryDirectory() as tmp:
@@ -107,7 +107,7 @@ with tempfile.TemporaryDirectory() as tmp:
     steps = [c["step"] for c in calls]
     ok(steps == ["facts", "facts", "thesis", "draft1", "draft2", "draft3", "draft4", "revise"],
        f"단계 순서: 사실 · 논지 · 초안 4 · 고침 ({steps})")
-    ok(all("gemini-3.1-flash-lite:generateContent" in c["url"] for c in calls), "모든 호출이 모델 하나")
+    ok(all("gemini-3-flash-preview:generateContent" in c["url"] for c in calls), "모든 호출이 모델 하나")
     ok([c["imgs"] for c in calls if c["step"] == "facts"] == [1, 1], "사실은 사진 한 장씩")
     ok(all(c["imgs"] == 2 for c in calls if c["step"].startswith("draft")), "초안에는 사진 두 장이 다 간다")
     ok(calls[0]["gen"] == {"responseMimeType": "application/json"}, "사실 · 논지는 JSON 으로 받는다")
@@ -122,10 +122,10 @@ with tempfile.TemporaryDirectory() as tmp:
     ok(r["gate"]["hard"] == [] and r["gate"]["soft"] == [], f"고친 판이 덜 나빠서 바꿨다 ({r['gate']})")
     rep = (T / "out" / "report.md").read_text()
     ok("| 2 ← 고름 |" in rep and "고친 판" in rep, "보고서: 초안 2 를 골랐고 고친 판이 최종")
-    ok("응답이 밝힌 모델: gemini-3.1-flash-lite-001" in rep and "호출 8번" in rep, "보고서: 응답이 밝힌 모델 · 호출 수")
+    ok("응답이 밝힌 모델: gemini-3-flash-preview-001" in rep and "호출 8번" in rep, "보고서: 응답이 밝힌 모델 · 호출 수")
     ok("모델(확인 안 됨)" in rep, "모델이 뽑은 사진 사실은 '확인 안 됨' 으로 적는다")
     led = [json.loads(l) for l in (T / "out" / "ledger.jsonl").read_text().splitlines()]
-    ok(sum(1 for l in led if l["kind"] == "MODEL_CALL") == 8 and all(l["reported"] == "gemini-3.1-flash-lite-001"
+    ok(sum(1 for l in led if l["kind"] == "MODEL_CALL") == 8 and all(l["reported"] == "gemini-3-flash-preview-001"
        for l in led if l["kind"] == "MODEL_CALL"), "원장: 호출마다 응답이 밝힌 모델")
     ok(sum(1 for l in led if l["kind"] == "GATE") == 5, "원장: 초안 넷 + 고친 판의 관문")
     ok((T / "out" / "final.md").read_text().strip() == doc(GOOD1, GOOD2, GOOD3).strip(), "final.md 가 최종 글")

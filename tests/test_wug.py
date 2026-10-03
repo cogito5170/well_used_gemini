@@ -63,6 +63,7 @@ with tempfile.TemporaryDirectory() as tmp:
     shutil.copy(ROOT / "wug.py", W / "wug.py")
     shutil.copy(ROOT / "wug_inspect.py", W / "wug_inspect.py")
     shutil.copy(ROOT / "wug_media.py", W / "wug_media.py")
+    shutil.copy(ROOT / "wug_model.py", W / "wug_model.py")
     (W / "requirements.txt").write_text("")
 
     def lock(commit):
@@ -312,8 +313,8 @@ class _M(BaseHTTPRequestHandler):
         name = self.path.split("/models/", 1)[1]
         if self.headers.get("x-goog-api-key") != "AIzaMODELTEST":
             code, body = 403, {"error": {"message": "bad key"}}
-        elif name == "gemini-3.1-flash-lite":
-            code, body = 200, {"name": "models/gemini-3.1-flash-lite", "displayName": "Gemini 3.1 Flash-Lite",
+        elif name == "gemini-3-flash-preview":
+            code, body = 200, {"name": "models/gemini-3-flash-preview", "displayName": "Gemini 3 Flash Preview",
                                "inputTokenLimit": 1048576, "supportedGenerationMethods": ["generateContent"]}
         elif name == "embed-x":
             code, body = 200, {"name": "models/embed-x", "supportedGenerationMethods": ["embedContent"]}
@@ -344,27 +345,42 @@ with tempfile.TemporaryDirectory() as tmp:
                            env={**base, **({"GEMINI_API_KEY": "AIzaMODELTEST"} if key else {})}, timeout=60)
         return p.returncode, p.stdout + p.stderr
     before = sp.read_text()
-    code, out = m("gemini-3.1-flash-lite", key=False)
+    code, out = m("gemini-3-flash-preview", key=False)
     ok(code == 1 and sp.read_text() == before and "키가 없어" in out, "키가 없으면 확인 못 함 -> 안 쓴다")
-    code, out = m("gemini-3.1-flash-lite-previe")
+    code, out = m("gemini-3-flash-previe")
     ok(code == 1 and sp.read_text() == before and "404" in out, "API 가 모르는 이름(오타)은 안 쓴다")
     code, out = m("embed-x")
     ok(code == 1 and sp.read_text() == before, "generateContent 를 안 받는 모델은 안 쓴다")
-    code, out = m("gemini-3.1-flash-lite")
+    code, out = m("gemini-3-flash-preview")
     d = json.loads(sp.read_text())
-    ok(code == 0 and d == {"model": {"name": "gemini-3.1-flash-lite", "maxSessionTurns": 5}, "ui": {"theme": "x"}},
-       f"model.name 만 바꾸고 나머지는 그대로 ({d})")
+    one = [{"model": "gemini-3-flash-preview", "isLastResort": True}]
+    ok(code == 0 and d["model"] == {"name": "gemini-3-flash-preview", "maxSessionTurns": 5} and d["ui"] == {"theme": "x"},
+       f"model.name 을 바꾸고 다른 칸은 그대로 ({d})")
+    ok(d["experimental"] == {"dynamicModelConfiguration": True}
+       and d["modelConfigs"]["modelChains"] == {k: one for k in ("preview", "default", "auto-preview", "auto-default")},
+       "폴백 사슬을 이 모델 하나로 묶는다(Gemini CLI 0.62.0 은 3-flash-preview 가 막히면 3.1-pro-preview 를 내민다)")
     baks = list((H / ".gemini").glob("settings.json.bak-*"))
     ok(len(baks) == 1 and json.loads(baks[0].read_text())["model"]["name"] == "auto", "옛 설정을 .bak 으로 남긴다")
     code, out = m()
-    ok(code == 0 and "gemini-3.1-flash-lite" in out and "있음" in out, "인자 없이 부르면 지금 값과 API 확인을 보인다")
+    ok(code == 0 and "gemini-3-flash-preview" in out and "있음" in out, "인자 없이 부르면 지금 값과 API 확인을 보인다")
     sp.write_text('{\n  // 주석\n  "ui": {}\n}\n')
-    code, out = m("gemini-3.1-flash-lite")
+    code, out = m("gemini-3-flash-preview")
     ok(code == 1 and "// 주석" in sp.read_text() and "덮어쓰지 않는다" in out, "주석이 든 settings.json 은 안 건드린다")
     sp.unlink()
-    code, out = m("gemini-3.1-flash-lite")
-    ok(code == 0 and json.loads(sp.read_text()) == {"model": {"name": "gemini-3.1-flash-lite"}}, "파일이 없으면 새로 만든다")
+    code, out = m("gemini-3-flash-preview")
+    ok(code == 0 and json.loads(sp.read_text())["model"] == {"name": "gemini-3-flash-preview"}, "파일이 없으면 새로 만든다")
 _srv.shutdown()
+
+print("[모델] 하나 · 폴백 없음")
+import wug_model as WMD  # noqa: E402
+ok(WMD.MODEL == "gemini-3-flash-preview" and WMD.CLI_VERSION == "0.62.0", "사용자 결정: gemini-3-flash-preview · Gemini CLI 0.62.0")
+import wug_media as WMED  # noqa: E402
+import wug_essay as WESS  # noqa: E402
+ok(WMED.pick_image_model(lambda: [{"name": "models/other-image"}]) == WMD.MODEL and WESS.MODEL == WMD.MODEL,
+   "묻기 · 그림 · 글쓰기가 같은 모델(목록을 보고 다른 것을 고르지 않는다)")
+_srcs = "".join((ROOT / f).read_text() for f in ("wug_media.py", "wug_essay.py", "wug_bench.py", "wug.py", "wug_mcp.py"))
+ok("flash-lite" not in _srcs and "WUG_ESSAY_MODEL" not in _srcs and "WUG_ASK_MODEL" not in _srcs
+   and "WUG_BENCH_BIG" not in _srcs, "다른 모델 이름 · 모델을 바꾸는 환경 변수가 코드에 없다")
 
 print("[확장] 매니페스트 · 훅 파일 꼴 (Gemini CLI 0.46.0 문서 · 로더 기준)")
 m = json.loads((ROOT / "gemini-extension.json").read_text())

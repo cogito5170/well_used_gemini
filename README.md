@@ -6,7 +6,7 @@ Gemini 를 **런타임이 판정하는 게이트 뒤에서** 돌리는 얇은 �
 
 | 무엇 | 어디서 |
 |---|---|
-| 모델 하나(`gemini-3.1-flash-lite`) · 폴백 없음 · 응답이 밝힌 모델 대조 | se_new `agentic/model.py` |
+| 모델 하나(`gemini-3-flash-preview`) · 폴백 없음 · 응답이 밝힌 모델 대조 | se_new `agentic/model.py` · 이 저장소 `wug_model.py` |
 | 상태·루프·Gate01·MCP 칸은 **원장에서만** 그림. 모델이 쓴 깃발은 위조로 거절 | `agentic/render.py` · `agentic/forgery.py` |
 | 제어부(등록 도구, LLM 없는 라우팅) → 사고부(ReAct · 루프 탐지기). WALP 앞단은 2026-10-02 에 뺐다 | `controller.py` · `thinker.py` |
 | 도구는 sandbox(HEAD 워크트리)에서만 · 회로 차단기 · 수리 요청 | `agentic/tools.py` · `breaker.py` |
@@ -81,13 +81,14 @@ python3 ~/.gemini/extensions/well-used-gemini/wug.py doctor
 - 저장 자리: `~/Pictures/well_used_gemini/` (`WUG_OUT` 으로 바꾼다). 같은 이름이 있으면 `-2` 를 붙인다 -- 덮어쓰지 않는다
 - 이미지 모델 이름은 **적어 두지 않았다.** 키로 API 의 모델 목록을 읽어 `generateContent` 를 받는 `image` 모델을 고른다
   (미리보기가 아닌 것 먼저). 직접 정하려면 `WUG_IMAGE_MODEL`. 보고서에는 **응답이 밝힌 모델**을 적는다
-- 이 그림 생성은 se_new 의 게이트 파이프라인 **밖**이다 -- 고정 모델(flash-lite) 정책과 다른 모델을 쓴다. 그래서 보고에 모델을 따로 적는다
+- 그림도 **같은 모델 하나**(`wug_model.MODEL`)로 만든다 -- 목록에서 이미지 모델을 고르지 않는다(폴백 없음). 그 모델이 그림을 못 내면
+  `no_image_returned` 로 그대로 실패한다. 진짜 호출로는 아직 확인하지 못했다
 - 처음 쓸 때 Pillow · pypdfium2 를 가상환경에 스스로 깐다(사람이 깔 것 없음)
 - 한 요청에 싣는 원본은 18MB 까지(넘으면 보내기 전에 막는다). HEIC 는 읽기(`media_ask`)만 되고 변환은 안 된다
 
 ### 글쓰기 파이프라인 (`essay_write` · `wug.py essay`)
 
-작은 모델 하나(`gemini-3.1-flash-lite`)의 바깥에 단계를 친다. 판정은 코드가 한다.
+모델 하나(`gemini-3-flash-preview`)의 바깥에 단계를 친다. 판정은 코드가 한다.
 
 1. **사진 사실** -- 사진마다 보이는 것만 JSON 으로(spec 에 사람이 `facts` 를 적으면 그것이 이긴다)
 2. **문항 역할** -- 코드가 나눈다: "왜 중요한가" -> 정의 · "나는 왜" -> 내 이유 · "좋은 ~란" -> 기준
@@ -105,24 +106,34 @@ python3 ~/.gemini/extensions/well-used-gemini/wug.py doctor
   나와 순환이다) · 검토 칸. **못 가른 것**: 글자쌍 겹침으로 잰 되풀이(같은 생각을 다른 말로 쓴 것을 못 잡았다 -- 그래서
   빼고 '문항별 새 요점' 으로 바꿨다) · 메모체(두 본문 다 ~다 였다. 메모체는 Gemini 의 머리말에만 있었다)
 
-### 기본 모델
+### 모델 -- 하나, 폴백 없음 · Gemini CLI 0.62.0 (사용자 결정 2026-10-03)
+
+모든 부분(agentic · 묻기 · 그림 · 글쓰기 · 실험 · CLI 기본값)이 `gemini-3-flash-preview` 하나다. 이름은 `wug_model.py`
+한 곳에 있고, 환경 변수로 바꾸는 길은 없다. se_new 의 `agentic/config.json` 도 같은 이름이다(`doctor` 가 맞춰 본다).
 
 ```bash
-python3 ~/.gemini/extensions/well-used-gemini/wug.py model gemini-3.1-flash-lite
+npm install -g @google/gemini-cli@0.62.0
+python3 ~/.gemini/extensions/well-used-gemini/wug.py model gemini-3-flash-preview
+python3 ~/.gemini/extensions/well-used-gemini/wug.py doctor
 ```
 
-이름이 **API 에 실제로 있고 generateContent 를 받는지** 키로 확인한 뒤에만 `~/.gemini/settings.json` 의 `model.name`
-하나를 바꾼다(옛 파일은 `.bak-<시각>` 으로 남긴다 · 주석이 든 파일은 안 건드린다). 인자 없이 부르면 지금 값과 확인 결과를 보인다.
+`wug.py model` 은 키로 API 에 그 이름이 있고 generateContent 를 받는지 확인한 뒤에만 `~/.gemini/settings.json` 을 바꾼다
+(옛 파일은 `.bak-<시각>`). 바꾸는 것: `model.name` · 그리고 **폴백 사슬을 이 모델 하나로 묶는 칸**
+(`experimental.dynamicModelConfiguration: true` · `modelConfigs.modelChains`).
 
-- 이름의 근거: Gemini CLI 0.46.0 `models.js` 의 `DEFAULT_GEMINI_FLASH_LITE_MODEL = 'gemini-3.1-flash-lite'`
-  ("Gemini 3.1 Flash Lite is now GA"). `-preview` 가 붙은 것은 옛 이름이다
-- Gemini CLI 가 모델을 고르는 차례: `-m` > 환경 변수 `GEMINI_MODEL` > `settings.json` 의 `model.name` > `auto`
-- 진짜 CLI 번들로 확인: 설정이 없으면 `auto` 가 `gemini-3.1-pro-preview` 로, `gemini-3.1-flash-lite` 는 그대로 간다.
-  CLI 가 이름을 바꿔 치는 경우도 있다(`gemini-2.5-flash` -> `gemini-3.5-flash`). 그래서 `/stats` 로 실제 모델을 본다
+Gemini CLI 0.62.0 코드와 진짜 번들로 확인한 것:
+- `gemini-3-flash-preview` 는 바꿔 치지 않는다. (0.61 부터 `gemini-3.1-flash-lite` 는 API 키 인증에서 늘
+  `gemini-3.5-flash-lite` 로 바뀐다 -- 그래서 이 이름을 안 쓴다)
+- 그런데 Gemini 3 모델의 폴백 사슬은 돌아 감긴다: flash-preview 가 막히면 `gemini-3.1-pro-preview` 를 내민다
+  (코드 주석: "fallback to Pro if Flash is exhausted"). 위의 사슬 칸이 그것을 막는다
+- 헤드리스(`-p`)에서 하루 한도 429 를 가짜 API 로 일으켜 보았다: 기본 설정 · 묶은 설정 둘 다 **flash-preview 한 번만 부르고 멈췄다**
+- **대화형 모드에서 사슬 칸이 '다른 모델로 바꿀까요' 를 정말 없애는지는 못 돌려 봤다**(대화형은 여기서 못 띄운다)
+- 0.62.0 은 API 키를 쓰려면 `settings.json` 에 `"security": {"auth": {"selectedType": "gemini-api-key"}}` 가 있어야 했다
+  (없으면 "Invalid auth method selected." · 끝값 41). 구글 계정으로 로그인해 쓰고 있다면 해당 없다
 
 ### 글쓰기 모드 · 글쓰기 실험
 
-Gemini CLI 의 기본 지시문은 코딩용이다(0.46.0 `prompts/snippets.js`: "an interactive CLI agent specializing in
+Gemini CLI 의 기본 지시문은 코딩용이다(0.46.0 · 0.62.0 `prompts/snippets.js`: "an interactive CLI agent specializing in
 software engineering tasks" · "Minimal Output: Aim for fewer than 3 lines"). 지원서 · 매거진 글이 짧은 메모체로
 나오는 까닭 하나가 이것이다. 글을 쓸 때는 이렇게 띄운다:
 
@@ -134,14 +145,13 @@ python3 ~/.gemini/extensions/well-used-gemini/wug.py write
 사진에서 실제로 보이는 것을 쓴다 · 논지 하나 · 문항마다 다른 역할 · 1인칭 평서문(메모체 없음) · 끝에 '주의할 점'
 (상투구 · 출처 미확인 인용 · 사용자만 줄 수 있는 것). 사용자의 삶을 지어내지 않는다.
 
-**실험**(`wug.py bench`) -- 같은 요청 · 같은 사진으로 네 조건을 N 번씩 돌려 차이가 어디서 오는지 가른다:
+**실험**(`wug.py bench`) -- 같은 요청 · 같은 사진 · **같은 모델**로 세 조건을 N 번씩 돌려 차이가 어디서 오는지 가른다:
 
 | 조건 | 무엇 | 가르는 것 |
 |---|---|---|
-| a | Gemini CLI 그대로(`-m` 작은 모델) | a−b = 지시문의 몫 |
+| a | Gemini CLI 그대로(`-m gemini-3-flash-preview`) | a−b = 지시문의 몫 |
 | b | Gemini CLI + 글쓰기 모드 | b−c = CLI 배관(사진 붙이기 · 도구 · GEMINI.md)의 몫 |
-| c | API 직접 · 같은 작은 모델 · 같은 글쓰기 지시문 · 사진 inline | c−d = 모델 크기의 몫 |
-| d | API 직접 · 큰 모델(목록에서 pro, 또는 `--big`) | |
+| c | API 직접 · 같은 글쓰기 지시문 · 사진 inline | |
 
 ```bash
 cp ~/.gemini/extensions/well-used-gemini/bench/example.json ~/Desktop/spec.json
@@ -189,7 +199,7 @@ python3 wug.py inspect runs 5
 - 사진·PDF 도구(`tests/test_media.py`) -- 가짜 Gemini 서버를 띄워 진짜 HTTP 길로 받기·내보내기·형식 넷을 돌림.
   파일은 바이트로 확인(jpg 머리 · `%PDF` · 쪽 수). 코드 변이 여섯 모두 빨간불
 
-- 글쓰기 모드 · 실험(`tests/test_bench.py`) -- 가짜 `gemini` · 가짜 API 로 네 조건 끝까지, 코드 변이 여섯 모두 빨간불.
+- 글쓰기 모드 · 실험(`tests/test_bench.py`) -- 가짜 `gemini` · 가짜 API 로 조건 끝까지, 코드 변이 여섯 모두 빨간불.
   그리고 **진짜 Gemini CLI 0.46.0 번들**을 가짜 응답(`--fake-responses-non-strict`)으로 돌려: 기본 지시문에는
   "fewer than 3 lines" 가 있고 글쓰기 모드에서는 사라진다(`GEMINI_WRITE_SYSTEM_MD` 로 뽑아 봄) · `-p` 에서
   `@photo1.jpg` 가 `inlineData image/jpeg` 로 실린다 · `-o json` 의 `stats.models` 키가 응답이 밝힌 모델이다
