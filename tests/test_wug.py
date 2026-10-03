@@ -430,6 +430,8 @@ with tempfile.TemporaryDirectory() as _rt:
         r = wug_mcp.handle({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
                             "params": {"name": "result_read", "arguments": {"result_id": rid, "offset": 0, "length": 99999}}})
         ok(len(r["result"]["content"][0]["text"]) <= wug_mcp.RESULT_CAP + 120, "result_read 자체도 상한을 넘지 않는다")
+        t, _ = wug_mcp.read_result(rid, 0, 99999)
+        ok(len(t) <= wug_mcp.RESULT_CAP + 120, "read_result 도 한 번에 상한까지만(바깥 상한에 기대지 않는다)")
         _orig = wug_mcp.call
         wug_mcp.call = lambda n, a: ("y" * 50000, False)
         try:
