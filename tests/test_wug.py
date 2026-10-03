@@ -382,6 +382,17 @@ _srcs = "".join((ROOT / f).read_text() for f in ("wug_media.py", "wug_essay.py",
 ok("flash-lite" not in _srcs and "WUG_ESSAY_MODEL" not in _srcs and "WUG_ASK_MODEL" not in _srcs
    and "WUG_BENCH_BIG" not in _srcs, "다른 모델 이름 · 모델을 바꾸는 환경 변수가 코드에 없다")
 
+print("[단계표] steps.json -- 빠진 단계가 없고 kind 는 model | tool 뿐 (CMD-WUG1 S5)")
+_st = json.loads((ROOT / "steps.json").read_text())
+_ids = [x["id"] for x in _st["steps"]]
+ok(len(_ids) == len(set(_ids)) and all(x["kind"] in ("model", "tool") for x in _st["steps"]), "id 가 겹치지 않고 kind 는 닫혀 있다")
+ok(all(f"mcp.{t['name']}" in _ids for t in wug_mcp.TOOLS), "MCP 도구마다 한 줄")
+ok(all(f"essay.{n}" in _ids for n in ("facts", "roles", "thesis", "points_clean", "draft", "gate", "select", "revise", "report")),
+   "글쓰기 단계마다 한 줄")
+ok(_st["model"] == WMD.MODEL, "단계표의 모델 = wug_model.MODEL")
+ok(all((x["model_calls"] == 0) == (x["kind"] == "tool") for x in _st["steps"] if isinstance(x["model_calls"], int)),
+   "tool 은 모델 호출 0, model 은 1 이상")
+
 print("[확장] 매니페스트 · 훅 파일 꼴 (Gemini CLI 0.46.0 문서 · 로더 기준)")
 m = json.loads((ROOT / "gemini-extension.json").read_text())
 ok(m["name"] == "well-used-gemini" and m["contextFileName"] == "GEMINI.md", "이름(소문자·대시) · 컨텍스트 파일")
