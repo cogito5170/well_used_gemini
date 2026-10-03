@@ -1,5 +1,5 @@
 {
  "url": "https://github.com/cogito5170/se_new",
- "commit": "6a79353186784f271e0e5d776049f34ce418a958",
- "why": "cogito5170/se_new#10 머지 커밋 -- WALP 앞단 제거"
+ "commit": "eed677bd7bf538132bd8c9468e756115b2b7661f",
+ "why": "cogito5170/se_new#11 머지 커밋 -- 고정 모델 gemini-3-flash-preview"
 }
