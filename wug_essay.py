@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import sys
@@ -140,47 +141,26 @@ def rank_key(g: dict) -> tuple:
 
 # ---------------------------------------------------------------- 모델 단계
 class Run:
-    def __init__(self, out: Path, poster=None):
-        self.out, self.poster, self.calls = out, poster, []
+    """글쓰기 실행 하나의 자리 · 원장(사람이 읽는 것). 모델 호출 자체는 rlo 의 Scheduler 가 한다(CMD-WUG1 S6)."""
+    def __init__(self, out: Path):
+        self.out = out
         out.mkdir(parents=True, exist_ok=True)
 
     def log(self, kind: str, data: dict) -> None:
         with open(self.out / "ledger.jsonl", "a", encoding="utf-8") as f:
             f.write(json.dumps({"t": round(time.time(), 3), "kind": kind, **data}, ensure_ascii=False) + "\n")
 
-    def call(self, step: str, parts: list, text: str, as_json=False, temperature=None) -> str:
-        gen = {}
-        if as_json:
-            gen["responseMimeType"] = "application/json"
-        if temperature is not None:
-            gen["temperature"] = temperature
-        body = {"contents": [{"role": "user", "parts": parts + [{"text": text}]}]}
-        if gen:
-            body["generationConfig"] = gen
-        # 이어 하기(CMD-WUG1 S7): 같은 요청의 답이 저장돼 있으면 모델을 다시 부르지 않는다.
-        # 한도에 걸려 멈춘 뒤 같은 spec 으로 다시 부르면 끝난 단계는 건너뛰고 남은 단계만 한도를 쓴다.
-        import hashlib
-        key = hashlib.sha256(json.dumps([MODEL, step, body], ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:20]
-        cache = self.out / "cache" / f"{key}.json"
-        if cache.is_file():
-            c = json.loads(cache.read_text(encoding="utf-8"))
-            self.calls.append(c["reported"])
-            self.log("MODEL_CALL_REUSED", {"step": step, "reported": c["reported"], "chars": len(c["text"])})
-            return c["text"]
-        try:
-            resp = WM._post(MODEL, body, self.poster)
-        except WM.QuotaWait as q:
-            self.log("QUOTA_WAIT", {"step": step, "scope": q.scope, "seconds": q.seconds})
-            raise
-        out = "\n".join(WM._texts(resp)).strip()
-        rep = resp.get("modelVersion") or "미보고"
-        self.calls.append(rep)
-        self.log("MODEL_CALL", {"step": step, "asked": MODEL, "reported": rep, "chars": len(out)})
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        tmp = cache.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"step": step, "reported": rep, "text": out}, ensure_ascii=False), encoding="utf-8")
-        tmp.replace(cache)
-        return out
+
+def body(parts: list, text: str, as_json=False, temperature=None) -> dict:
+    gen = {}
+    if as_json:
+        gen["responseMimeType"] = "application/json"
+    if temperature is not None:
+        gen["temperature"] = temperature
+    b = {"contents": [{"role": "user", "parts": parts + [{"text": text}]}]}
+    if gen:
+        b["generationConfig"] = gen
+    return b
 
 
 def _json(text: str, default):
@@ -197,41 +177,38 @@ FACTS_ASK = ("List only what is visible in this photo, for a fashion/space essay
              "Do not guess anything you cannot see. Answer in Korean for facts.")
 
 
-def step_facts(R: Run, spec: dict) -> list:
-    out = []
-    for i, p in enumerate(spec.get("photos") or []):
-        given = (spec.get("facts") or {}).get(str(i + 1)) if isinstance(spec.get("facts"), dict) else None
-        if given:                         # 사람이 적은 사실이 이긴다
-            out.append({"photo": i + 1, "facts": given, "words": [w for f in given for w in f.split("|")],
-                        "by": "사람"})
-            continue
-        d = _json(R.call("facts", WM._parts_for([p]), FACTS_ASK, as_json=True), {})
-        facts = [str(x) for x in (d.get("facts") or [])][:8] if isinstance(d, dict) else []
-        words = [str(x) for x in (d.get("words") or [])][:16] if isinstance(d, dict) else []
-        out.append({"photo": i + 1, "facts": facts, "words": words, "by": "모델(확인 안 됨)"})
-    R.log("FACTS", {"facts": out})
-    return out
+def human_facts(spec: dict, i: int):
+    given = (spec.get("facts") or {}).get(str(i + 1)) if isinstance(spec.get("facts"), dict) else None
+    return {"photo": i + 1, "facts": given, "words": [w for f in given for w in f.split("|")], "by": "사람"} if given else None
 
 
-def step_thesis(R: Run, spec: dict, facts: list) -> "tuple[str, list]":
-    ask = (f"요청:\n{spec['prompt']}\n\n문항:\n" + "\n".join(f"Q{i + 1}. {q}" for i, q in enumerate(spec["questions"]))
-           + "\n\n사진에서 보이는 것:\n" + "\n".join(f"- 사진{f['photo']}: {', '.join(f['facts'])}" for f in facts)
-           + ("\n\n쓰는 사람의 실제 재료:\n" + spec["material"] if spec.get("material") else "")
-           + "\n\n이 글 전체가 섬길 논지 후보 5개를 만들어라. 각 후보는 한 문장 주장이다(구호가 아니라 펼칠 수 있는 주장). "
-             "흔한 비유(예: '옷은 건축이다')에 기대면 그 사실을 적어라. 그다음 가장 구체적이고 사진과 재료로 뒷받침되는 것을 골라라. "
-             "마지막으로 고른 논지로 문항마다 **앞 문항이 말하지 않은 새 요점** 하나씩을 정하고, 그 요점을 가리키는 "
-             "짧은 한국어 낱말 2~3개를 붙여라(문항끼리 낱말이 겹치면 안 된다). "
-             'JSON: {"candidates": ["..."], "pick": 0부터 센 번호, "why": "...", '
-             '"points": [{"q": 1, "point": "...", "words": ["...", "..."]}, ...]}')
-    d = _json(R.call("thesis", [], ask, as_json=True), {})
+def parse_facts(text: str, i: int) -> dict:
+    d = _json(text or "", {})
+    facts = [str(x) for x in (d.get("facts") or [])][:8] if isinstance(d, dict) else []
+    words = [str(x) for x in (d.get("words") or [])][:16] if isinstance(d, dict) else []
+    return {"photo": i + 1, "facts": facts, "words": words, "by": "모델(확인 안 됨)"}
+
+
+def thesis_ask(spec: dict, facts: list) -> str:
+    return (f"요청:\n{spec['prompt']}\n\n문항:\n" + "\n".join(f"Q{i + 1}. {q}" for i, q in enumerate(spec["questions"]))
+            + "\n\n사진에서 보이는 것:\n" + "\n".join(f"- 사진{f['photo']}: {', '.join(f['facts'])}" for f in facts)
+            + ("\n\n쓰는 사람의 실제 재료:\n" + spec["material"] if spec.get("material") else "")
+            + "\n\n이 글 전체가 섬길 논지 후보 5개를 만들어라. 각 후보는 한 문장 주장이다(구호가 아니라 펼칠 수 있는 주장). "
+              "흔한 비유(예: '옷은 건축이다')에 기대면 그 사실을 적어라. 그다음 가장 구체적이고 사진과 재료로 뒷받침되는 것을 골라라. "
+              "마지막으로 고른 논지로 문항마다 **앞 문항이 말하지 않은 새 요점** 하나씩을 정하고, 그 요점을 가리키는 "
+              "짧은 한국어 낱말 2~3개를 붙여라(문항끼리 낱말이 겹치면 안 된다). "
+              'JSON: {"candidates": ["..."], "pick": 0부터 센 번호, "why": "...", '
+              '"points": [{"q": 1, "point": "...", "words": ["...", "..."]}, ...]}')
+
+
+def parse_thesis(text: str, n: int) -> dict:
+    d = _json(text or "", {})
     cands = [str(c) for c in (d.get("candidates") or [])] if isinstance(d, dict) else []
     pick = d.get("pick", 0) if isinstance(d, dict) else 0
     pick = pick if isinstance(pick, int) and 0 <= pick < len(cands) else 0
-    thesis = cands[pick] if cands else ""
-    points = clean_points(d.get("points") if isinstance(d, dict) else None, len(spec["questions"]))
-    R.log("THESIS", {"candidates": cands, "pick": pick, "why": (d.get("why") if isinstance(d, dict) else ""),
-                     "points": points})
-    return thesis, cands, points
+    return {"thesis": cands[pick] if cands else "", "candidates": cands, "pick": pick,
+            "why": (d.get("why") if isinstance(d, dict) else "") or "",
+            "points": clean_points(d.get("points") if isinstance(d, dict) else None, n)}
 
 
 def clean_points(raw, n: int) -> list:
@@ -269,53 +246,150 @@ def draft_prompt(spec: dict, facts: list, thesis: str, roles: list, points=None)
               "'주의할 점' 에는 상투적인 데 · 확인 안 한 인용 · 쓰는 사람만 줄 수 있는 것과 그것을 끌어낼 물음 하나.")
 
 
-def step_drafts(R: Run, spec: dict, facts: list, thesis: str, roles: list, n: int, points=None) -> list:
-    parts = WM._parts_for(spec.get("photos") or [])
-    base = draft_prompt(spec, facts, thesis, roles, points)
-    temps = [0.7, 0.9, 1.0, 1.1, 0.8, 1.2][:n] + [1.0] * max(0, n - 6)
-    drafts = []
-    for i, t in enumerate(temps):
-        txt = R.call(f"draft{i + 1}", parts, base, temperature=t)
-        drafts.append(txt)
-        (R.out / f"draft{i + 1}.md").write_text(txt, encoding="utf-8")
-    return drafts
+TEMPS = [0.7, 0.9, 1.0, 1.1, 0.8, 1.2]
 
 
-def step_revise(R: Run, spec: dict, text: str, g: dict) -> str:
+def revise_ask(text: str, g: dict) -> str:
     """위반 목록만 돌려보낸다(어떻게 재는지는 안 알려 준다 -- 알려 주면 검사가 사양서가 된다)."""
-    issues = g["hard"] + g["soft"]
-    ask = ("아래 글을 고쳐라. 지적된 곳만 고치고, 논지와 꼴('## Q번호' · '## 주의할 점')은 그대로 둔다.\n\n"
-           "지적:\n" + "\n".join(f"- {x}" for x in issues) + "\n\n글:\n" + text)
-    return R.call("revise", WM._parts_for(spec.get("photos") or []), ask, temperature=0.4)
+    return ("아래 글을 고쳐라. 지적된 곳만 고치고, 논지와 꼴('## Q번호' · '## 주의할 점')은 그대로 둔다.\n\n"
+            "지적:\n" + "\n".join(f"- {x}" for x in g["hard"] + g["soft"]) + "\n\n글:\n" + text)
 
 
-def run(spec: dict, out: Path, poster=None) -> dict:
+RPM = 5    # 지킴이의 분당 요청 수. gemini-3-flash-preview 무료 등급의 분당 한도를 여기서는 모른다 -- 가정이다(ga 와 같은 값).
+           # 서버가 429 의 retryDelay 로 말하면 그것이 이긴다(rlo Governor).
+
+
+def kinds_table() -> dict:
+    """steps.json -> rlo 의 닫힌 걸음 표(rlo-step-kinds/1). 표에 없는 걸음 이름은 rlo 가 싣는 순간 거절한다."""
+    st = json.loads((HERE / "steps.json").read_text(encoding="utf-8"))
+    return {"schema": "rlo-step-kinds/1", "steps": {x["id"]: x["kind"] for x in st["steps"]}}
+
+
+def provider_for(poster=None):
+    """rlo 가 부르는 모델 공급자. payload 는 요청 몸통(None 이면 부를 일이 없다 -- 고칠 것이 없는 글).
+    결과는 JSON 이 되는 dict 라야 rlo 가 저장해 다시 띄워도 이어 간다. 429 는 QuotaWait(status 429 · body)로 올라가
+    Governor.is_rate_limit 이 알아본다 -- 다시 보내는 것은 rlo 의 일이고, 여기서 되풀이하지 않는다."""
+    def provider(payload):
+        if payload is None:
+            return {"text": None, "skipped": True}
+        resp = WM._post(MODEL, payload, poster)
+        return {"text": "\n".join(WM._texts(resp)).strip(), "modelVersion": resp.get("modelVersion") or "미보고",
+                "usageMetadata": resp.get("usageMetadata")}
+    return provider
+
+
+def build_steps(spec: dict, out: Path, R: Run):
+    from rlo.scheduler import Step
+    photos = spec.get("photos") or []
+    qs = spec["questions"]
+    n = int(spec.get("n", 4))
+    roles_given = spec.get("roles")
+    steps = []
+    fact_ids = []
+    for i, p in enumerate(photos):
+        if human_facts(spec, i) is None:
+            fact_ids.append(f"facts{i + 1}")
+            steps.append(Step(f"facts{i + 1}", "essay.facts", payload=body(WM._parts_for([p]), FACTS_ASK, as_json=True)))
+
+    def facts_of(res) -> list:
+        return [human_facts(spec, i) or parse_facts(res.get(f"facts{i + 1}", {}).get("text"), i) for i in range(len(photos))]
+
+    steps.append(Step("roles", "essay.roles", fn=lambda res: assign_roles(qs, roles_given)))
+    steps.append(Step("thesis", "essay.thesis", after=tuple(fact_ids),
+                      payload=lambda res: body([], thesis_ask(spec, facts_of(res)), as_json=True)))
+
+    def plan(res):
+        facts = facts_of(res)
+        t = parse_thesis(res["thesis"]["text"], len(qs))
+        R.log("FACTS", {"facts": facts})
+        R.log("THESIS", {k: t[k] for k in ("candidates", "pick", "why", "points")})
+        return {"facts": facts, **t}
+    steps.append(Step("plan", "essay.points_clean", after=("thesis", "roles"), fn=plan))
+    parts = WM._parts_for(photos)
+    temps = TEMPS[:n] + [1.0] * max(0, n - len(TEMPS))
+    for k, t in enumerate(temps, 1):
+        steps.append(Step(f"draft{k}", "essay.draft", after=("plan",),
+                          payload=lambda res, t=t: body(parts, draft_prompt(spec, res["plan"]["facts"], res["plan"]["thesis"],
+                                                                             res["roles"], res["plan"]["points"]), temperature=t)))
+
+        def gate_k(res, k=k):
+            txt = res[f"draft{k}"]["text"] or ""
+            (out / f"draft{k}.md").write_text(txt, encoding="utf-8")
+            g = gate(txt, spec, res["plan"]["facts"], res["roles"], res["plan"]["points"])
+            R.log("GATE", {"draft": k, **g})
+            return g
+        steps.append(Step(f"gate{k}", "essay.gate", after=(f"draft{k}",), fn=gate_k))   # 초안마다 -- 다른 초안을 기다리지 않는다
+
+    def select(res):
+        best = min(range(1, n + 1), key=lambda k: rank_key(res[f"gate{k}"]))
+        return {"best": best}
+    steps.append(Step("select", "essay.select", after=tuple(f"gate{k}" for k in range(1, n + 1)), fn=select))
+
+    def revise_payload(res):
+        k = res["select"]["best"]
+        g = res[f"gate{k}"]
+        if not (g["hard"] or g["soft"]):
+            return None
+        return body(parts, revise_ask(res[f"draft{k}"]["text"], g), temperature=0.4)
+    steps.append(Step("revise", "essay.revise", after=("select",), payload=revise_payload))
+
+    def finish(res):
+        k = res["select"]["best"]
+        final, fg, revised = res[f"draft{k}"]["text"], res[f"gate{k}"], False
+        rv = res["revise"]
+        if not rv.get("skipped") and rv.get("text") is not None:
+            rg = gate(rv["text"], spec, res["plan"]["facts"], res["roles"], res["plan"]["points"])
+            R.log("GATE", {"draft": "revised", **rg})
+            (out / "revised.md").write_text(rv["text"], encoding="utf-8")
+            if rank_key(rg) < rank_key(fg):      # 덜 나쁠 때만 바꾼다
+                final, fg, revised = rv["text"], rg, True
+        calls = [res[sid]["modelVersion"] for sid in sorted(res) if isinstance(res[sid], dict) and res[sid].get("modelVersion")]
+        rep = report(spec, res["plan"]["facts"], res["plan"]["thesis"], res["plan"]["candidates"], res["roles"],
+                     [res[f"gate{j}"] for j in range(1, n + 1)], k - 1, fg, revised, calls, res["plan"]["points"])
+        (out / "final.md").write_text(final, encoding="utf-8")
+        (out / "report.md").write_text(rep, encoding="utf-8")
+        R.log("END", {"best": k, "revised": revised, "hard": len(fg["hard"]), "soft": len(fg["soft"])})
+        return {"final": final, "gate": fg}
+    steps.append(Step("report", "essay.report", after=("revise",), fn=finish))
+    return steps
+
+
+class QuotaParked(WM.MediaError):
+    """rlo 가 모델 걸음을 세워 두었다(분당 창 · 하루 할당). 실패가 아니다 -- 같은 spec 으로 다시 부르면 저장한 상태에서 이어 간다."""
+    def __init__(self, status: dict, out: Path):
+        self.status, self.out = status, out
+        w = status.get("resumes_in_s")
+        wait = "다음 날 한도 재설정까지" if w is None or (isinstance(w, float) and not math.isfinite(w)) else f"{int(math.ceil(w))} s"
+        super().__init__(f"quota wait {wait} -- 끝남 {len(status.get('done') or [])} · 세움 {status.get('parked')} · "
+                         f"다음 {status.get('next')}. 같은 요청을 다시 부르면 이어 한다 ({out})")
+
+
+def run(spec: dict, out: Path, poster=None, *, wait: bool = True, clock=None, sleep=None, rpm: int = RPM) -> dict:
+    """rlo Scheduler 로 돈다(CMD-WUG1 S6): 도구 걸음은 준비되면 언제나, 모델 걸음은 지킴이가 허락할 때만.
+    429 · 분당 창은 실패가 아니라 세움이다. wait=False 면 세워야 할 때 상태를 저장하고 QuotaParked 를 던진다."""
     if not spec.get("questions") or not spec.get("prompt"):
         raise WM.MediaError("spec 에 prompt 와 questions 가 있어야 한다")
-    R = Run(out, poster)
-    roles = assign_roles(spec["questions"], spec.get("roles"))
-    R.log("START", {"model": MODEL, "questions": spec["questions"], "roles": roles,
-                    "photos": len(spec.get("photos") or []), "material": bool(spec.get("material"))})
-    facts = step_facts(R, spec)
-    thesis, cands, points = step_thesis(R, spec, facts)
-    drafts = step_drafts(R, spec, facts, thesis, roles, int(spec.get("n", 4)), points)
-    gates = [gate(d, spec, facts, roles, points) for d in drafts]
-    for i, g in enumerate(gates):
-        R.log("GATE", {"draft": i + 1, **g})
-    best = min(range(len(drafts)), key=lambda i: rank_key(gates[i]))
-    final, fg, revised = drafts[best], gates[best], False
-    if fg["hard"] or fg["soft"]:
-        rv = step_revise(R, spec, final, fg)
-        rg = gate(rv, spec, facts, roles, points)
-        R.log("GATE", {"draft": "revised", **rg})
-        (out / "revised.md").write_text(rv, encoding="utf-8")
-        if rank_key(rg) < rank_key(fg):          # 덜 나쁠 때만 바꾼다
-            final, fg, revised = rv, rg, True
-    (out / "final.md").write_text(final, encoding="utf-8")
-    rep = report(spec, facts, thesis, cands, roles, gates, best, fg, revised, R.calls, points)
-    (out / "report.md").write_text(rep, encoding="utf-8")
-    R.log("END", {"best": best + 1, "revised": revised, "hard": len(fg["hard"]), "soft": len(fg["soft"])})
-    return {"final": final, "report": rep, "out": str(out), "gate": fg}
+    try:
+        from rlo.governor import Governor
+        from rlo.scheduler import Scheduler
+    except ImportError:
+        raise WM.MediaError("rlo(ga-sdk)가 가상환경에 없다 -- python3 wug.py setup") from None
+    R = Run(out)
+    R.log("START", {"model": MODEL, "questions": spec["questions"], "photos": len(spec.get("photos") or []),
+                    "material": bool(spec.get("material")), "scheduler": "rlo"})
+    gov = Governor({MODEL: {"rpm": rpm}}, **({"clock": clock} if clock else {}))
+    sched = Scheduler(build_steps(spec, out, R), gov, provider_for(poster), kinds=kinds_table(), run_id="essay",
+                      ledger=str(out / "sched.jsonl"), l0=str(out / "l0.jsonl"), state=str(out / "state.json"),
+                      **({"clock": clock} if clock else {}), **({"sleep": sleep} if sleep else {}))
+    rep = sched.run(wait=wait)
+    if rep.failed or rep.skipped:
+        raise WM.MediaError(f"걸음 실패: {rep.failed or rep.skipped}")
+    if "report" not in rep.done:
+        R.log("QUOTA_PARKED", {"status": rep.status})
+        raise QuotaParked(rep.status, out)
+    fin = rep.done["report"]
+    return {"final": fin["final"], "report": (out / "report.md").read_text(encoding="utf-8"), "out": str(out),
+            "gate": fin["gate"], "sched": rep}
 
 
 def report(spec, facts, thesis, cands, roles, gates, best, fg, revised, calls, points=None) -> str:
@@ -356,10 +430,10 @@ def main(argv) -> int:
     spec["photos"] = [str(Path(os.path.expanduser(p)).resolve()) for p in spec.get("photos") or []]
     out = Path(os.path.expanduser(spec.get("out") or f"~/well_used_gemini_essays/{spec_key(spec)}"))
     try:
-        r = run(spec, out)
-    except WM.QuotaWait as q:
-        # 실패가 아니다 -- 끝난 단계는 out/cache 에 있다. 같은 spec 으로 다시 부르면 이어서 한다
-        print(f"[essay] {q} · 저장 자리 {out}")
+        r = run(spec, out, wait=os.environ.get("WUG_ESSAY_WAIT", "1") != "0")
+    except QuotaParked as q:
+        # 실패가 아니다 -- rlo 가 상태를 out/state.json 에 저장했다. 같은 spec 으로 다시 부르면 이어서 한다
+        print(f"[essay] {q}")
         return 4
     except WM.MediaError as e:
         print(f"[essay] {WM._hide(str(e))}", file=sys.stderr)

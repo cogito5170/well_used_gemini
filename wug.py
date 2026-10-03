@@ -12,6 +12,7 @@ sandbox 실행 · MCP · RAG). 여기는 그것을 **고정된 커밋으로** �
     python3 wug.py media info|ask|generate|convert '<JSON>'   사진·PDF 받기/내보내기(wug_media.py)
     python3 wug.py model [이름]          Gemini CLI 의 기본 모델(~/.gemini/settings.json 의 model.name). 이름을 주면
                                       API 로 실제 있는지 확인한 뒤에만 쓴다(기본 wug_model.MODEL) · 폴백 없는 사슬도 같이 쓴다
+    python3 wug.py ga "할 일" [--resume]   ga gemini(턴마다 짧은 CLI · rlo 지킴이 · 우리 MCP 도구가 도구 걸음)
     python3 wug.py essay spec.json        글쓰기 파이프라인(사진 사실 · 논지 · 문항 역할 · 초안 N벌 · 코드 관문 · 한 번 고침)
     python3 wug.py cli [gemini 인자...]    Gemini CLI 를 힙 임시방편(8 GB · 한계 근처 스냅숏)으로 띄운다
     python3 wug.py write [gemini 인자...]  Gemini CLI 를 글쓰기 모드로(writing/system.md 가 기본 지시문을 바꾼다)
@@ -409,14 +410,21 @@ def media(rest: list) -> int:
     if not venv_python().exists():
         return die("가상환경이 없다 -- python3 wug.py setup")
     argv = [str(venv_python()), str(HERE / "wug_media.py"), *rest]
-    probe = subprocess.run([str(venv_python()), "-c", "import PIL, pypdfium2, requests"], capture_output=True)
-    if probe.returncode != 0 and os.environ.get("WUG_SKIP_PIP") != "1":
-        print("[wug] 사진·PDF 도구가 쓸 패키지(Pillow · pypdfium2)를 가상환경에 깐다(처음 한 번)", file=sys.stderr)
-        r = subprocess.run([str(venv_python()), "-m", "pip", "install", "--quiet", "--disable-pip-version-check",
-                            "-r", str(HERE / "requirements.txt")], capture_output=True, text=True)
-        if r.returncode != 0:
-            return die(f"pip 실패: {r.stderr.strip()[-400:]}")
+    bad = ensure_deps()
+    if bad:
+        return die(bad)
     return subprocess.run(argv, cwd=str(HERE), env=child_env()).returncode
+
+
+def ensure_deps(mods: str = "PIL, pypdfium2, requests, rlo, ga") -> "str | None":
+    """가상환경에 requirements.txt 의 패키지가 없으면 한 번 깐다(사람에게 시키지 않는다). 실패하면 까닭을 돌려준다."""
+    probe = subprocess.run([str(venv_python()), "-c", f"import {mods}"], capture_output=True)
+    if probe.returncode == 0 or os.environ.get("WUG_SKIP_PIP") == "1":
+        return None
+    print("[wug] 가상환경에 requirements.txt 의 패키지를 깐다(처음 한 번 · ga-sdk 는 고정 커밋)", file=sys.stderr)
+    r = subprocess.run([str(venv_python()), "-m", "pip", "install", "--quiet", "--disable-pip-version-check",
+                        "-r", str(HERE / "requirements.txt")], capture_output=True, text=True)
+    return None if r.returncode == 0 else f"pip 실패: {r.stderr.strip()[-400:]}"
 
 
 GEMINI_API = os.environ.get("WUG_GEMINI_API", "https://generativelanguage.googleapis.com/v1beta")
@@ -534,9 +542,46 @@ def write(rest: list) -> int:
     return 0
 
 
+GA_RPM = 5   # ga 와 같은 가정: gemini-3-flash-preview 무료 등급의 분당 한도를 모른다. 429 의 retryDelay 가 이긴다
+
+
+def ga_config(cli: "list | None" = None) -> dict:
+    """ga gemini(CMD-GA21)의 설정 -- 모델 고정 · 폴백 없음 · 우리 MCP 도구 가운데 **도구 걸음만**(steps.json 의 kind tool).
+    모델을 스스로 부르는 도구(agentic_run · media_ask · image_generate · essay_write)는 넣지 않는다 -- 지킴이를 비켜 가는 길이 된다."""
+    import wug_mcp
+    kinds = {x["id"]: x["kind"] for x in json.loads((HERE / "steps.json").read_text(encoding="utf-8"))["steps"]}
+    tools = {}
+    for t in wug_mcp.TOOLS:
+        if kinds.get(f"mcp.{t['name']}") == "tool" and t["name"] not in ("agentic_setup", "agentic_doctor"):
+            tools[f"wug.{t['name']}"] = {"mcp": "wug", "tool": t["name"], "about": " ".join(t["description"].split())[:200]}
+    return {"schema": "ga-gemini/1", "model": DEFAULT_CLI_MODEL, "cli": cli or ["gemini"], "budget": {"rpm": GA_RPM},
+            "mcp_servers": {"wug": {"command": [str(venv_python()), str(HERE / "wug_mcp.py")], "cwd": str(HERE)}},
+            "tools": tools, "state_dir": str(WUG_HOME / "ga" / "state")}
+
+
+def ga(rest: list) -> int:
+    """ga gemini 로 돈다(CMD-WUG1 S10): 턴마다 짧게 사는 headless CLI(--resume) -- 힙이 쌓이지 않는다.
+    Gemini 는 닫힌 걸음 목록으로 지휘만 하고, 도구 걸음은 우리 MCP 도구가 rlo Scheduler 아래에서 한다."""
+    if not venv_python().exists():
+        return die("가상환경이 없다 -- python3 wug.py setup")
+    bad = ensure_deps()
+    if bad:
+        return die(bad)
+    d = WUG_HOME / "ga"
+    d.mkdir(parents=True, exist_ok=True)
+    cfg = d / "ga-gemini.json"
+    cli = json.loads(os.environ["WUG_GA_CLI"]) if os.environ.get("WUG_GA_CLI") else None   # 시험용: 다른 gemini 명령
+    cfg.write_text(json.dumps(ga_config(cli), ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+    return subprocess.run([str(venv_python()), "-m", "ga", "gemini", "--config", str(cfg), *rest], cwd=str(d),
+                          env=child_env()).returncode
+
+
 def essay(rest: list) -> int:
     if not venv_python().exists():
         return die("가상환경이 없다 -- python3 wug.py setup")
+    bad = ensure_deps()
+    if bad:
+        return die(bad)
     return subprocess.run([str(venv_python()), str(HERE / "wug_essay.py"), *rest], env=child_env()).returncode
 
 
@@ -573,6 +618,8 @@ def main(argv=None) -> int:
         return model_cmd(rest)
     if cmd == "write":
         return write(rest)
+    if cmd == "ga":
+        return ga(rest)
     if cmd == "essay":
         return essay(rest)
     if cmd == "bench":
@@ -583,7 +630,7 @@ def main(argv=None) -> int:
         return key_cmd(rest)
     if cmd == "inspect":
         return inspect(rest)
-    return die(f"모르는 명령: {cmd} (setup · doctor · run · versions · key · model · cli · write · essay · bench · media · inspect)", 2)
+    return die(f"모르는 명령: {cmd} (setup · doctor · run · versions · key · model · cli · write · ga · essay · bench · media · inspect)", 2)
 
 
 if __name__ == "__main__":

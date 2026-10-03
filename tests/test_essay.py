@@ -103,7 +103,7 @@ with tempfile.TemporaryDirectory() as tmp:
     for i in (1, 2):
         Image.new("RGB", (20, 20), (i * 60, 0, 0)).save(T / f"p{i}.jpg", "JPEG")
     spec = {**SPEC, "photos": [str(T / "p1.jpg"), str(T / "p2.jpg")], "n": 4}
-    r = E.run(spec, T / "out", poster)
+    r = E.run(spec, T / "out", poster, rpm=1000)
     steps = [c["step"] for c in calls]
     ok(steps == ["facts", "facts", "thesis", "draft1", "draft2", "draft3", "draft4", "revise"],
        f"단계 순서: 사실 · 논지 · 초안 4 · 고침 ({steps})")
@@ -125,9 +125,10 @@ with tempfile.TemporaryDirectory() as tmp:
     ok("응답이 밝힌 모델: gemini-3-flash-preview-001" in rep and "호출 8번" in rep, "보고서: 응답이 밝힌 모델 · 호출 수")
     ok("모델(확인 안 됨)" in rep, "모델이 뽑은 사진 사실은 '확인 안 됨' 으로 적는다")
     led = [json.loads(l) for l in (T / "out" / "ledger.jsonl").read_text().splitlines()]
-    ok(sum(1 for l in led if l["kind"] == "MODEL_CALL") == 8 and all(l["reported"] == "gemini-3-flash-preview-001"
-       for l in led if l["kind"] == "MODEL_CALL"), "원장: 호출마다 응답이 밝힌 모델")
     ok(sum(1 for l in led if l["kind"] == "GATE") == 5, "원장: 초안 넷 + 고친 판의 관문")
+    rows = [json.loads(l) for l in (T / "out" / "sched.jsonl").read_text().splitlines()]
+    ok(sum(1 for x in rows if x.get("kind") == "done" and x.get("step_kind") == "model") == 8
+       and not any(x.get("kind") == "failed" for x in rows), "rlo 원장: 모델 걸음 여덟이 끝나고 실패 0")
     ok((T / "out" / "final.md").read_text().strip() == doc(GOOD1, GOOD2, GOOD3).strip(), "final.md 가 최종 글")
 
     print("[파이프라인] 고친 판이 더 나쁘면 안 바꾼다 · 사람이 적은 사실이 이긴다")
@@ -140,7 +141,7 @@ with tempfile.TemporaryDirectory() as tmp:
             out["candidates"][0]["content"]["parts"][0]["text"] = BAD
         return out
     spec2 = {**spec, "facts": {"1": ["상점 창|쇼윈도", "코트"], "2": ["강가", "파카"]}}
-    r2 = E.run(spec2, T / "out2", worse)
+    r2 = E.run(spec2, T / "out2", worse, rpm=1000)
     ok([c["step"] for c in calls][:2] == ["thesis", "draft1"], "사람이 사실을 적었으면 사실 뽑기 호출이 없다")
     ok(any("밀도" in x for x in r2["gate"]["soft"]) and (T / "out2" / "final.md").read_text().strip() == DRAFTS["draft2"].strip(),
        "고친 판이 더 나쁘면 고른 초안을 그대로 낸다")
@@ -156,7 +157,7 @@ with tempfile.TemporaryDirectory() as tmp:
         if calls[-1]["step"] == "revise":
             out["candidates"][0]["content"]["parts"][0]["text"] = BAD
         return out
-    r3 = E.run(spec2, T / "out3", stuck)
+    r3 = E.run(spec2, T / "out3", stuck, rpm=1000)
     ok(r3["gate"]["hard"] and "통과하지 못했다" in (T / "out3" / "report.md").read_text(),
        "hard 가 남으면 보고서가 '통과하지 못했다' 고 적는다")
 
@@ -169,35 +170,100 @@ ok(q.scope == "minute" and q.seconds == 37 and "quota wait 37 s" in str(q), f"�
 q = WM.classify_429({"error": {"details": [{"@type": "x/google.rpc.QuotaFailure",
                                             "violations": [{"quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier"}]}]}}, "m")
 ok(q.scope == "day" and q.seconds is None and "하루" in str(q), "하루 한도는 day")
+print("[D2] rlo Scheduler: 429 retryDelay 에서 실패 0 · 기다리는 동안 도구 걸음 · 창 뒤에 모델 걸음 (CMD-WUG1 S6)")
+from rlo.governor import gemini_429  # noqa: E402
+
+
+class Clock:
+    def __init__(self):
+        self.t, self.slept = 1000.0, []
+
+    def __call__(self):
+        return self.t
+
+    def sleep(self, s):
+        self.slept.append(s)
+        self.t += s
+
+
+def quota_poster(fail_at: set, delay="30s"):
+    """n 번째 모델 호출(1부터)에서 429 -- 같은 걸음을 다시 보내면 통과한다."""
+    seen = {"n": 0}
+
+    def p(url, body):
+        seen["n"] += 1
+        if seen["n"] in fail_at:
+            raise WM.classify_429(gemini_429(delay), "gemini-3-flash-preview")
+        return poster(url, body)
+    return p, seen
+
+
 with tempfile.TemporaryDirectory() as tmp:
     T = Path(tmp)
-    calls.clear()
     for k in DRAFTS:
-        DRAFTS[k] = doc(GOOD1, GOOD2, GOOD3)
-    budget = {"left": 3}
-
-    def limited(url, body):
-        if budget["left"] <= 0:
-            raise WM.QuotaWait("minute", 30.0, "gemini-3-flash-preview")
-        budget["left"] -= 1
-        return poster(url, body)
-    spec3 = {**SPEC, "n": 4, "facts": {}}
-    try:
-        E.run(spec3, T / "q", limited)
-        ok(False, "한도에서 멈춰야 한다")
-    except WM.QuotaWait as e:
-        ok(e.seconds == 30.0, "세 번 쓰고 넷째에서 quota wait")
-    first = [c["step"] for c in calls]
-    led = (T / "q" / "ledger.jsonl").read_text()
-    ok('"QUOTA_WAIT"' in led and '"seconds": 30.0' in led, "원장에 QUOTA_WAIT 와 기다릴 초")
+        DRAFTS[k] = doc(GOOD1, GOOD2, GOOD3 + " 공기의 밀도.")
     calls.clear()
-    budget["left"] = 100
-    r = E.run(spec3, T / "q", limited)
-    second = [c["step"] for c in calls]
-    ok(first == ["thesis", "draft1", "draft2"] and len(second) == 2 and all(x.startswith("draft") for x in second),
-       f"다시 부르면 남은 두 초안만 모델을 부른다 ({first} -> {len(second)}번)")
-    led = (T / "q" / "ledger.jsonl").read_text()
-    ok(led.count('"MODEL_CALL_REUSED"') == 3 and r["gate"]["hard"] == [], "끝난 세 단계는 저장된 답을 다시 쓴다 · 끝까지 간다")
+    clk = Clock()
+    qp, seen = quota_poster({3})                          # thesis · draft1 다음, draft2 에서 429
+    spec3 = {**SPEC, "n": 4}
+    r = E.run(spec3, T / "d2", qp, clock=clk, sleep=clk.sleep, rpm=1000)
+    rep_ = r["sched"]
+    ok(not rep_.failed and not rep_.skipped and not rep_.parked and r["final"], "실패 0 · 건너뜀 0 · 끝까지 갔다")
+    ok(clk.slept and abs(sum(clk.slept) - 30.0) < 1e-6, f"서버가 말한 30 s 만큼 잤다 -- 바쁘게 되풀이하지 않았다 ({clk.slept})")
+    rows = [json.loads(l) for l in (T / "d2" / "sched.jsonl").read_text().splitlines()]
+    ev = [(x.get("kind"), x.get("step")) for x in rows]
+    i_rl = ev.index(("rate_limit", "draft2"))
+    i_gate1 = ev.index(("done", "gate1"))
+    i_resend = max(i for i, e in enumerate(ev) if e == ("dispatch", "draft2"))
+    ok(i_rl < i_gate1 < i_resend, f"draft2 를 세운 동안 gate1(도구)이 돌고, 창 뒤에 draft2 를 다시 보냈다 ({ev[i_rl:i_resend + 1]})")
+    ok(seen["n"] == 4 + 2 + 1, f"모델 호출 = 논지 1 + 초안 4 + 다시 보냄 1 + 고침 1 ({seen['n']})")
+    disp = [x for x in rows if x.get("kind") == "dispatch"]
+    ok(all(x.get("step") in ("thesis", "draft1", "draft2", "draft3", "draft4", "revise") for x in disp),
+       "모델 걸음만 dispatch 된다(도구 걸음은 공급자를 안 부른다)")
+    ok(all(E.kinds_table()["steps"][x["name"]] in ("model", "tool") for x in rows if x.get("name")),
+       "원장의 걸음 이름이 다 단계표에 있다(분류 안 된 걸음 없음)")
+
+    print("[D2] 기다리지 않는 판: 세울 때 상태를 저장하고 quota wait 로 돌아온다 -- 다시 부르면 이어 간다")
+    calls.clear()
+    clk = Clock()
+    qp, seen = quota_poster({3}, delay="45s")
+    try:
+        E.run(spec3, T / "nw", qp, wait=False, clock=clk, sleep=clk.sleep, rpm=1000)
+        ok(False, "QuotaParked 가 나야 한다")
+    except E.QuotaParked as q:
+        ok("quota wait 45 s" in str(q) and (T / "nw" / "state.json").is_file(), f"quota wait 45 s · 상태 저장 ({str(q)[:60]})")
+    ok(clk.slept == [], "기다리지 않는 판은 자지 않는다")
+    first = seen["n"]
+    clk.t += 45
+    qp2, seen2 = quota_poster(set())
+    r = E.run(spec3, T / "nw", qp2, wait=False, clock=clk, sleep=clk.sleep, rpm=1000)
+    ok(r["final"] and first == 3 and seen2["n"] == 4, f"다시 띄운 프로세스가 남은 걸음만 보낸다(처음 {first} · 이어서 {seen2['n']})")
+    ok("QUOTA_PARKED" in (T / "nw" / "ledger.jsonl").read_text(), "원장에 QUOTA_PARKED")
+
+    print("[D2] 지킴이: 예산이 비면 모델 걸음은 보내지 않는다(분당 2) -- 그동안 도구 걸음은 돈다")
+    calls.clear()
+    clk = Clock()
+    qp, seen = quota_poster(set())
+    r = E.run(spec3, T / "rpm", qp, clock=clk, sleep=clk.sleep, rpm=2)
+    rows = [json.loads(l) for l in (T / "rpm" / "sched.jsonl").read_text().splitlines()]
+    ts = sorted(x["at_ms"] / 1000 for x in rows if x.get("kind") == "dispatch")
+    worst = max(sum(1 for u in ts if t <= u < t + 60) for t in ts)
+    ok(r["final"] and len(ts) == 6 and worst <= 2, f"모델 호출 6번, 어느 60 초 창에도 2번 이하 ({worst}) · 실패 0")
+    ok(not r["sched"].failed and clk.slept and all(x > 0 for x in clk.slept), f"기다림은 잠으로(바쁜 되풀이 없음) · {len(clk.slept)}번 잤다")
+    ev = [(x.get("kind"), x.get("step")) for x in rows]
+    first_park = next(i for i, e in enumerate(ev) if e[0] == "park")
+    ok(any(e[0] == "done" and e[1].startswith("gate") for e in ev[first_park:]), "세운 뒤에도 도구 걸음(gate)이 돈다")
+
+    print("[D2] 하루 한도: 무한 대기는 기다리지 않고 세워 둔 채 돌아온다")
+    clk = Clock()
+    def day(url, body):
+        raise WM.classify_429(gemini_429(None, per="Day"), "gemini-3-flash-preview")
+    try:
+        E.run(spec3, T / "day", day, wait=False, clock=clk, sleep=clk.sleep, rpm=1000)
+        ok(False, "QuotaParked")
+    except E.QuotaParked as q:
+        ok("다음 날" in str(q), f"하루 한도 -> 다음 날까지 ({str(q)[:50]})")
+
 ok(E.spec_key({"prompt": "a", "questions": ["q"]}) == E.spec_key({"questions": ["q"], "prompt": "a", "out": "x"})
    and E.spec_key({"prompt": "a", "questions": ["q"]}) != E.spec_key({"prompt": "a", "questions": ["q"], "fresh": 1}),
    "같은 요청이면 같은 자리 · fresh 로 새 자리")

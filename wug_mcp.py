@@ -184,9 +184,9 @@ def _gh(fn, *args) -> "tuple[str, bool]":
         return f"[GitHub] {e}", True
 
 
-def _wug(*args: str, timeout: int = 900) -> "tuple[int, str]":
+def _wug(*args: str, timeout: int = 900, env_extra=None) -> "tuple[int, str]":
     try:
-        p = subprocess.run([sys.executable, str(HERE / "wug.py"), *args], cwd=str(HERE), env=dict(os.environ),
+        p = subprocess.run([sys.executable, str(HERE / "wug.py"), *args], cwd=str(HERE), env={**os.environ, **(env_extra or {})},
                            capture_output=True, text=True, timeout=timeout)
         return p.returncode, (p.stdout + ("\n" + p.stderr if p.stderr.strip() else "")).strip()
     except subprocess.TimeoutExpired:
@@ -241,7 +241,9 @@ def call(name: str, a: dict) -> "tuple[str, bool]":
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
             json.dump(spec, f, ensure_ascii=False)
         try:
-            code, out = _wug("essay", f.name, timeout=1200)
+            # 기다리지 않는다: 모델 걸음을 세워야 하면 rlo 가 상태를 저장하고 'quota wait N s' 로 돌아온다(끝값 4).
+            # Gemini 가 그만큼 기다렸다가 같은 요청으로 다시 부르면 저장한 상태에서 이어 간다
+            code, out = _wug("essay", f.name, timeout=1200, env_extra={"WUG_ESSAY_WAIT": "0"})
         finally:
             os.unlink(f.name)
         return out or "(출력 없음)", code not in (0, 3, 4)          # 3 = hard 남음 · 4 = quota wait

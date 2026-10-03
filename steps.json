@@ -333,6 +333,14 @@
    "note": "not ours; listed so the scheduler sees the whole session"
   },
   {
+   "id": "ga.gemini_turn",
+   "kind": "model",
+   "where": "wug.py ga -> python -m ga gemini (one headless CLI process per turn)",
+   "model_calls": "1+ per turn",
+   "parallel_ok": false,
+   "note": "S10: Gemini directs with a ga-gemini-plan/1 step list; tool steps are the tool-kind MCP tools under rlo"
+  },
+  {
    "id": "bench.cli_a",
    "kind": "model",
    "where": "wug_bench.py run_cli (condition a)",

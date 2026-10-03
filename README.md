@@ -106,6 +106,18 @@ python3 ~/.gemini/extensions/well-used-gemini/wug.py doctor
   나와 순환이다) · 검토 칸. **못 가른 것**: 글자쌍 겹침으로 잰 되풀이(같은 생각을 다른 말로 쓴 것을 못 잡았다 -- 그래서
   빼고 '문항별 새 요점' 으로 바꿨다) · 메모체(두 본문 다 ~다 였다. 메모체는 Gemini 의 머리말에만 있었다)
 
+### 한도와 이어 하기 -- rlo · ga (CMD-WUG1 S6 · S10)
+
+`ga-sdk`(고정 커밋 `98cbd2650a2cb38305b98d6235f72200fb937958`, rlo-sdk 0.7.0 @ `3d2e7d0b`)를 가상환경에 깐다(`requirements.txt` · 사용자 허락 2026-10-03).
+
+- **글쓰기 파이프라인은 rlo 의 Scheduler 로 돈다.** 걸음 표는 `steps.json`(닫힌 model | tool). 모델 걸음은 지킴이(분당 5 -- 가정,
+  429 의 retryDelay 가 이긴다)가 허락할 때만 보내고, 그동안 검사 같은 도구 걸음은 계속 돈다. 429 는 실패가 아니라 세움이다.
+  상태는 `state.json` 에 저장된다 -- MCP 의 `essay_write` 는 기다리지 않고 `quota wait N s` 로 돌아오고, 같은 요청으로 다시 부르면 이어 간다
+- **`python3 wug.py ga "할 일"`** -- ga gemini: 턴마다 짧게 사는 headless CLI(`--resume`)라 힙이 쌓이지 않는다. Gemini 는 닫힌 걸음
+  목록으로 지휘만 하고, 도구 걸음은 우리 MCP 도구 가운데 모델을 부르지 않는 것들(14개)이다. 끊겼으면 `wug.py ga --resume`
+- 실측(가짜 모델 · 진짜 CLI 0.62.0): 둘째 턴에 분당 429(retryDelay 3 s)를 주면 CLI 가 턴 안에서 같은 모델로 약 5 초 뒤 다시 보냈다
+  (ga 는 기다림 0 으로 봤다 · 폴백 없음)
+
 ### 모델 -- 하나, 폴백 없음 · Gemini CLI 0.62.0 (사용자 결정 2026-10-03)
 
 모든 부분(agentic · 묻기 · 그림 · 글쓰기 · 실험 · CLI 기본값)이 `gemini-3-flash-preview` 하나다. 이름은 `wug_model.py`

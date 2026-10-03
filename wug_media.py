@@ -41,8 +41,10 @@ class MediaError(RuntimeError):
 
 class QuotaWait(MediaError):
     """한도에 걸렸다 -- 실패가 아니라 기다릴 일이다(CMD-WUG1 S7). scope: minute | day. seconds: API 가 준 retryDelay(없으면 None)."""
-    def __init__(self, scope: str, seconds, model: str):
+    def __init__(self, scope: str, seconds, model: str, body=None):
         self.scope, self.seconds, self.model = scope, seconds, model
+        # rlo Governor 가 읽는 꼴(MS ProviderError 와 같은 칸): status · body. retryDelay · PerDay 를 거기서 다시 읽는다
+        self.status, self.body, self.headers = 429, body if isinstance(body, dict) else None, None
         wait = f"{int(seconds)} s" if seconds is not None else ("다음 날 한도 재설정까지" if scope == "day" else "모름")
         super().__init__(f"quota wait {wait} -- {model} {'하루' if scope == 'day' else '분당'} 한도. "
                          f"끝난 단계는 저장돼 있다; 같은 요청을 다시 부르면 이어서 한다")
@@ -60,7 +62,7 @@ def classify_429(err: dict, model: str) -> QuotaWait:
             m = re.match(r"^\s*(\d+(?:\.\d+)?)s\s*$", str(d.get("retryDelay", "")))
             if m:
                 secs = float(m.group(1))
-    return QuotaWait("day" if day else "minute", secs, model)
+    return QuotaWait("day" if day else "minute", secs, model, err)
 
 
 def _key() -> str:
