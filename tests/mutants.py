@@ -60,11 +60,18 @@ MUTANTS = [
        "            except WM.QuotaWait as q:\n"
        '                if q.scope != "day" or _try == 19:\n'
        "                    raise\n")]),
-    ("M7", "probe_cap_4: D3 탐침이 4번 보낸다(상한 3)", "tests/test_d3_probe.py",
-     [("wug_probe.py", "CAP = 3 ", "CAP = 4 ")]),
+    ("M7", "probe_cap_16: D3 탐침이 16번 보낸다(상한 15)", "tests/test_d3_probe.py",
+     [("wug_probe.py", "CAP = 15 ", "CAP = 16 ")]),
     ("M8", "probe_rerun_sends: 다시 치면 또 보낸다(하루 몫을 두 번 쓴다)", "tests/test_d3_probe.py",
      [("wug_probe.py", '    if any(r.get("kind") == "dispatch" for r in _rows(out, "sched.jsonl")):',
        '    if False:')]),
+    ("M9", "probe_no_stop: 넘고 이어 받은 뒤에도 상한까지 계속 보낸다(하루 몫 낭비)", "tests/test_d3_probe.py",
+     [("wug_probe.py", '            if sent["seen429"]:                 # 429 뒤에 기다렸다 보낸 것이 성공 -- 증거가 다 모였다\n'
+                       '                sent["stop"] = True\n',
+       '            if sent["seen429"]:\n                pass\n')]),
+    ("M10", "probe_error_continues: 다른 오류(500) 뒤에도 계속 보낸다", "tests/test_d3_probe.py",
+     [("wug_probe.py", '            with lock:\n                sent["stop"] = True\n            record({"i": i, "outcome": "error"',
+       '            record({"i": i, "outcome": "error"')]),
 ]
 
 

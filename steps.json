@@ -465,7 +465,7 @@
    ],
    "model_calls": 1,
    "parallel_ok": false,
-   "note": "D3 probe (CMD-WUG2 S4): at most 3 per run and 0 on a rerun; 'Reply with the single word: ok', maxOutputTokens 8"
+   "note": "D3 probe (CMD-WUG2 rev 2 S4): at most 15 requests per run, 0 on a rerun; stops after the first success that follows a minute 429, or at a day 429 or other error; 'Reply with the single word: ok', maxOutputTokens 8"
   },
   {
    "id": "bench.cli_a",

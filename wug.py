@@ -13,7 +13,7 @@ sandbox 실행 · MCP · RAG). 여기는 그것을 **고정된 커밋으로** �
     python3 wug.py model [이름]          Gemini CLI 의 기본 모델(~/.gemini/settings.json 의 model.name). 이름을 주면
                                       API 로 실제 있는지 확인한 뒤에만 쓴다(기본 wug_model.MODEL) · 폴백 없는 사슬도 같이 쓴다
     python3 wug.py ga "할 일" [--resume]   ga gemini(턴마다 짧은 CLI · rlo 지킴이 · 우리 MCP 도구가 도구 걸음)
-    python3 wug.py d3                     진짜 키로 분당 한도를 넘겨 보는 탐침(모델 요청 3번 이하 · 다시 쳐도 안 보낸다)
+    python3 wug.py d3                     진짜 키로 분당 한도를 넘겨 보는 탐침(모델 요청 15번 이하 · 다시 쳐도 안 보낸다)
     python3 wug.py essay spec.json        글쓰기 파이프라인(사진 사실 · 논지 · 문항 역할 · 초안 N벌 · 코드 관문 · 한 번 고침)
     python3 wug.py cli [gemini 인자...]    Gemini CLI 를 힙 임시방편(8 GB · 한계 근처 스냅숏)으로 띄운다
     python3 wug.py write [gemini 인자...]  Gemini CLI 를 글쓰기 모드로(writing/system.md 가 기본 지시문을 바꾼다)
