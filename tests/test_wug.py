@@ -411,13 +411,14 @@ with tempfile.TemporaryDirectory() as _rt:
     try:
         long = "".join(f"{i:05d}|" for i in range(3000))          # 18000 자
         out = wug_mcp.cap_result(long)
-        rid = out.rsplit("result_id ", 1)[1].split(" ")[0]
-        ok(len(out) < wug_mcp.RESULT_CAP + 200 and out.startswith(long[:wug_mcp.RESULT_CAP]) and len(rid) == 16,
-           f"상한 {wug_mcp.RESULT_CAP} 자 + 꼬리말 ({len(out)})")
+        # 단언이 먼저다 -- 자르지 않는 변이(tests/mutants.py M4)가 꼬리말 파싱에서 터지지 않고 이 줄에서 빨개지게
+        ok(len(out) < wug_mcp.RESULT_CAP + 200, f"긴 결과는 상한 {wug_mcp.RESULT_CAP} 자 + 꼬리말로 잘린다 ({len(out)})")
+        rid = out.rsplit("result_id ", 1)[1].split(" ")[0] if "result_id " in out else ""
+        ok(out.startswith(long[:wug_mcp.RESULT_CAP]) and len(rid) == 16, f"앞부분 그대로 + result_id ({rid!r})")
         ok(wug_mcp.cap_result("짧다") == "짧다", "짧은 결과는 그대로")
         got, off = "", wug_mcp.RESULT_CAP
         got = long[:off]
-        while True:
+        while rid:
             t, e = wug_mcp.read_result(rid, off)
             assert not e, t
             body = t.split("\n", 1)[1].rsplit("\n", 1)[0]
