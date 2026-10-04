@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -174,6 +175,10 @@ print("[D2] rlo Scheduler: 429 retryDelay 에서 실패 0 · 기다리는 동안
 from rlo.governor import gemini_429  # noqa: E402
 
 
+def KEYLESS(text):
+    return "AIza" not in text and "key=" not in text
+
+
 class Clock:
     def __init__(self):
         self.t, self.slept = 1000.0, []
@@ -223,6 +228,22 @@ with tempfile.TemporaryDirectory() as tmp:
     ok(all(E.kinds_table()["steps"][x["name"]] in ("model", "tool") for x in rows if x.get("name")),
        "원장의 걸음 이름이 다 단계표에 있다(분류 안 된 걸음 없음)")
 
+    line = E.ledger_summary(T / "d2")
+    ok("보냄 7" in line and "429 1 (기다림 s [30.0])" in line and "실패 0" in line and KEYLESS(line),
+       f"D3 에 붙여 보낼 원장 한 줄이 원장을 센다 ({line[line.index('보냄'):]})")
+    ok("보냄 0 · 429 0" in E.ledger_summary(T / "없음"), "원장이 없으면 0 으로 센다(터지지 않는다)")
+    for v, want in (("", E.RPM), ("60", 60)):
+        os.environ["WUG_RPM"] = v
+        ok(E.rpm_from_env() == want, f"WUG_RPM={v!r} -> {want}")
+    for v in ("0", "-3", "fast"):
+        os.environ["WUG_RPM"] = v
+        try:
+            E.rpm_from_env()
+            ok(False, f"WUG_RPM={v!r} 거절")
+        except WM.MediaError:
+            ok(True, f"WUG_RPM={v!r} 거절")
+    os.environ.pop("WUG_RPM")
+
     print("[D2] 기다리지 않는 판: 세울 때 상태를 저장하고 quota wait 로 돌아온다 -- 다시 부르면 이어 간다")
     calls.clear()
     clk = Clock()
@@ -255,14 +276,65 @@ with tempfile.TemporaryDirectory() as tmp:
     ok(any(e[0] == "done" and e[1].startswith("gate") for e in ev[first_park:]), "세운 뒤에도 도구 걸음(gate)이 돈다")
 
     print("[D2] 하루 한도: 무한 대기는 기다리지 않고 세워 둔 채 돌아온다")
-    clk = Clock()
-    def day(url, body):
-        raise WM.classify_429(gemini_429(None, per="Day"), "gemini-3-flash-preview")
-    try:
-        E.run(spec3, T / "day", day, wait=False, clock=clk, sleep=clk.sleep, rpm=1000)
-        ok(False, "QuotaParked")
-    except E.QuotaParked as q:
-        ok("다음 날" in str(q), f"하루 한도 -> 다음 날까지 ({str(q)[:50]})")
+    for wait in (False, True):
+        clk = Clock()
+        day_calls = []
+        def day(url, body):
+            day_calls.append(url)
+            raise WM.classify_429(gemini_429(None, per="Day"), "gemini-3-flash-preview")
+        try:
+            E.run(spec3, T / f"day-{wait}", day, wait=wait, clock=clk, sleep=clk.sleep, rpm=1000)
+            ok(False, "QuotaParked")
+        except E.QuotaParked as q:
+            ok("다음 날" in str(q), f"wait={wait}: 하루 한도 -> 다음 날까지 ({str(q)[:50]})")
+        ok(len(day_calls) == 1, f"wait={wait}: 하루 한도에서 모델 호출은 정확히 1번 -- 되풀이 없음 ({len(day_calls)})")
+
+print("[D3 리허설] 명령 그대로(wug_essay.py 프로세스) · 진짜 HTTP · 가짜 서버가 3번째 호출에 429 retryDelay 1s -- 붙여 보낼 줄이 찍힌다")
+import subprocess  # noqa: E402
+import threading  # noqa: E402
+from http.server import BaseHTTPRequestHandler, HTTPServer  # noqa: E402
+
+hits = {"n": 0}
+
+
+class Fake(BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        hits["n"] += 1
+        code, obj = (429, gemini_429("1s")) if hits["n"] == 3 else (200, poster(self.path, body))
+        b = json.dumps(obj).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(b)))
+        self.end_headers()
+        self.wfile.write(b)
+
+
+srv = HTTPServer(("127.0.0.1", 0), Fake)
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+with tempfile.TemporaryDirectory() as tmp:
+    T = Path(tmp)
+    for k in DRAFTS:
+        DRAFTS[k] = doc(GOOD1, GOOD2, GOOD3 + " 공기의 밀도.")
+    calls.clear()
+    (T / "d3.json").write_text(json.dumps({**SPEC, "n": 4, "out": str(T / "d3")}, ensure_ascii=False))
+    KEY = "AIza" + "SyD3REHEARSAL" * 3
+    env = {**os.environ, "WUG_GEMINI_API": f"http://127.0.0.1:{srv.server_port}/v1beta", "GEMINI_API_KEY": KEY,
+           "WUG_RPM": "60", "NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1"}
+    # 새 프로세스로 -- wug_media 는 API 주소를 불러올 때 한 번 읽는다. 사람이 칠 명령과 같은 길이다.
+    # 가짜 응답은 이 프로세스의 poster 가 짓는다(서버가 여기 있다)
+    pr = subprocess.run([sys.executable, str(ROOT / "wug_essay.py"), str(T / "d3.json")], env=env,
+                        capture_output=True, text=True, timeout=120)
+    code = pr.returncode
+    out = pr.stdout + pr.stderr
+    tail = out.strip().splitlines()[-1]
+    ok(code == 0 and tail.startswith("[essay] 원장") and "429 1 (기다림 s [1.0])" in tail and "실패 0" in tail,
+       f"끝값 0 · 마지막 줄이 원장 한 줄 · 429 1 · 실패 0 ({tail[tail.find('보냄'):]})")
+    ok(KEY not in out, "출력에 키가 없다(붙여 보내도 된다)")
+srv.shutdown()
 
 ok(E.spec_key({"prompt": "a", "questions": ["q"]}) == E.spec_key({"questions": ["q"], "prompt": "a", "out": "x"})
    and E.spec_key({"prompt": "a", "questions": ["q"]}) != E.spec_key({"prompt": "a", "questions": ["q"], "fresh": 1}),

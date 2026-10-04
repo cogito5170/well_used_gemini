@@ -422,6 +422,30 @@ def spec_key(spec: dict) -> str:
     return hashlib.sha256(json.dumps(keep, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16]
 
 
+def ledger_summary(out: Path) -> str:
+    """sched.jsonl 을 센 한 줄 -- D3 처럼 사람이 붙여 보내는 증거. 키 · 글 내용은 안 담긴다(원장에 없다)."""
+    rows = []
+    p = Path(out) / "sched.jsonl"
+    if p.is_file():
+        rows = [json.loads(x) for x in p.read_text(encoding="utf-8").splitlines() if x.strip()]
+    n = {k: sum(1 for r in rows if r.get("kind") == k) for k in ("dispatch", "rate_limit", "park", "done", "failed")}
+    ts = sorted(r["at_ms"] for r in rows if r.get("kind") == "dispatch" and isinstance(r.get("at_ms"), (int, float)))
+    burst = max((sum(1 for u in ts if t <= u < t + 60000) for t in ts), default=0)
+    waits = [r.get("wait_s") for r in rows if r.get("kind") == "rate_limit"]
+    return (f"[essay] 원장 {p}: 보냄 {n['dispatch']} · 429 {n['rate_limit']} (기다림 s {waits}) · 세움 {n['park']} · "
+            f"끝남 {n['done']} · 실패 {n['failed']} · 60초 창 최대 보냄 {burst}")
+
+
+def rpm_from_env() -> int:
+    """WUG_RPM -- 지킴이의 분당 수를 바꾼다. D3 처럼 서버 한도를 일부러 넘겨 보는 실행에만 쓴다."""
+    v = os.environ.get("WUG_RPM", "")
+    if not v:
+        return RPM
+    if not v.isdigit() or int(v) < 1:
+        raise WM.MediaError(f"WUG_RPM 은 1 이상의 정수라야 한다 ({v!r})")
+    return int(v)
+
+
 def main(argv) -> int:
     if not argv:
         print(__doc__)
@@ -430,16 +454,19 @@ def main(argv) -> int:
     spec["photos"] = [str(Path(os.path.expanduser(p)).resolve()) for p in spec.get("photos") or []]
     out = Path(os.path.expanduser(spec.get("out") or f"~/well_used_gemini_essays/{spec_key(spec)}"))
     try:
-        r = run(spec, out, wait=os.environ.get("WUG_ESSAY_WAIT", "1") != "0")
+        r = run(spec, out, wait=os.environ.get("WUG_ESSAY_WAIT", "1") != "0", rpm=rpm_from_env())
     except QuotaParked as q:
         # 실패가 아니다 -- rlo 가 상태를 out/state.json 에 저장했다. 같은 spec 으로 다시 부르면 이어서 한다
         print(f"[essay] {q}")
+        print(ledger_summary(out))
         return 4
     except WM.MediaError as e:
         print(f"[essay] {WM._hide(str(e))}", file=sys.stderr)
+        print(ledger_summary(out), file=sys.stderr)
         return 1
     print(r["final"])
     print(f"\n[essay] 관문: hard {len(r['gate']['hard'])} · soft {len(r['gate']['soft'])} · 보고서 {out / 'report.md'}")
+    print(ledger_summary(out))
     return 0 if not r["gate"]["hard"] else 3
 
 
